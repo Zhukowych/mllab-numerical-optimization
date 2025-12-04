@@ -1,3 +1,9 @@
 .venv/
 
 *__marimo__*
+
+src/adaptive-gd/wandb/
+src/adaptive-gd/matrix_A.npy
+src/adaptive-gd/vector_b.npy
+.env
+

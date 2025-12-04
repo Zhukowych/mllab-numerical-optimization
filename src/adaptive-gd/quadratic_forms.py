@@ -17,7 +17,24 @@ def _():
     import plotly.express as px
 
     from scipy.stats import ortho_group
-    return NDArray, jax, jnp, np, ortho_group
+
+    import wandb
+    from decouple import config
+
+    import polars as pl
+    return NDArray, config, jax, jnp, np, ortho_group, pl, wandb
+
+
+@app.cell
+def _(config):
+    wadnb_api_key = config("WANDB_API_KEY")
+    return (wadnb_api_key,)
+
+
+@app.cell
+def _(wadnb_api_key, wandb):
+    wandb.login(key=wadnb_api_key)
+    return
 
 
 @app.cell
@@ -55,17 +72,16 @@ def _(NDArray, gen_eigenvalues, gen_eigenvectors, jnp, np):
             self.b = np.random.rand(dim)
 
             self.A = eigen_vecs @ jordan_form @ inv_eigen_vec
-        
+
         def convert_to_jax(self) -> None:
             self.A = jnp.array(self.A)
             self.b = jnp.array(self.b)
-        
+
         def calculate_gradient(self, x: NDArray | jnp.ndarray) -> NDArray | jnp.ndarray:
             return self.A @ x - self.b
-        
+
         def calculate_function(self, x: NDArray | jnp.ndarray) -> NDArray | jnp.ndarray:
             return 0.5 * x.T @ self.A @ x - self.b @ x
-        
     return (QuadraticForm,)
 
 
@@ -143,19 +159,26 @@ def _(
 
 
 @app.cell
-def _(jnp):
-    def quadratic_gradient(A: jnp.ndarray, b: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
-        return A @ x - b
-    
-    def quadratic_function(A: jnp.ndarray, b: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
-        return 0.5 * x.T @ A @ x - b.T @ x
-    return
+def _():
+    device = "cpu"
+    return (device,)
 
 
 @app.cell
 def _():
-    device = "cpu"
-    return (device,)
+    results = {
+        "dimension": [],
+        "kernel_size": [],
+        "initial_point_index": [],
+        "iteration": [],
+        "function_value": [],
+        "gradient_norm": [],
+        "learning_rate": [], 
+        "max_eigenvalue": [],
+        "min_eigenvalue": [],
+        "max_eigenvalue_inverse": [],
+    }
+    return (results,)
 
 
 @app.cell
@@ -168,6 +191,7 @@ def _(
     jnp,
     lower_dim,
     max_ev,
+    results,
     upper_dim,
 ):
     with jax.default_device(jax.devices(device)[0]):
@@ -182,33 +206,47 @@ def _(
                 f = QuadraticForm(min_ev_random, max_ev_random, curr_dim, null_space_dim_curr)
                 f.convert_to_jax()
             
-                print("================================================================")
-                print(f"Generated quadratic form of dimension {curr_dim} and kernel dimension {null_space_dim_curr}")
-                print(f"Maximum eigen value {f.eigen_vals[-1]}")
-                print(f"1/λ {1 / f.eigen_vals[-1]}")
-                print("================================================================")
             
-                for _ in range(initial_point_samples_num.value):
-                    print("---")
-                    print("Generated new starting point")
-                    print("---")
+
+                for init_point_idx in range(initial_point_samples_num.value):
                     x = jax.random.uniform(
                         key = jax.random.PRNGKey(curr_dim),
                         shape=(curr_dim,),
                         minval=-100,
                         maxval=100,
                     )
-                
+
                     for i in range(gd_num_iterations.value):
                         grad_i = f.calculate_gradient(x)
                         lambda_i = (grad_i.T @ grad_i) / (grad_i.T @ f.A @grad_i)
-                    
-                        print(f"Iteration {i}. Learning rate: {lambda_i} ")
-                    
-                        x -= lambda_i * grad_i
-                    
 
-                    
+                        if (i % 100 == 0):
+                        
+                            results["dimension"].append(curr_dim)
+                            results["kernel_size"].append(null_space_dim_curr)
+                            results["max_eigenvalue"].append(f.eigen_vals[-1])
+                            results["min_eigenvalue"].append(f.eigen_vals[null_space_dim_curr])
+                            results["max_eigenvalue_inverse"].append(1 / f.eigen_vals[-1])
+                            results["initial_point_index"].append(init_point_idx)
+                            results["iteration"].append(i)
+                            results["function_value"].append(f.calculate_function(x))
+                            results["gradient_norm"].append(jnp.linalg.norm(grad_i))
+                            results["learning_rate"].append(lambda_i)
+
+                        x -= lambda_i * grad_i
+            
+    return
+
+
+@app.cell
+def _(pl, results):
+    results_df = pl.DataFrame(results)
+    return (results_df,)
+
+
+@app.cell
+def _(results_df):
+    results_df.write("quadratic_forms_gd_results.parquet")
     return
 
 
@@ -216,11 +254,6 @@ def _(
 def _():
     import marimo as mo
     return (mo,)
-
-
-@app.cell
-def _():
-    return
 
 
 if __name__ == "__main__":
