@@ -19,9 +19,7 @@ def _():
     import plotly.graph_objects as go
 
     from scipy.stats import ortho_group
-
-    from pathlib import Path
-    return NDArray, Path, go, jax, jnp, make_subplots, np, ortho_group, pl
+    return NDArray, go, jax, jnp, make_subplots, np, ortho_group, pl
 
 
 @app.cell
@@ -127,88 +125,11 @@ def _(mo):
     upper_dim = mo.ui.slider(start=0, stop=500, step=1)
     initial_point_samples_num = mo.ui.slider(start=1, stop=100, step=1)
     gd_num_iterations = mo.ui.slider(start = 100, stop = 3000, step = 1)
-    exp_name = mo.ui.text()
-    return (
-        exp_name,
-        gd_num_iterations,
-        initial_point_samples_num,
-        lower_dim,
-        upper_dim,
-    )
-
-
-@app.cell
-def _(Path, QuadraticForm, jax, jnp, mo, pl):
-    def run_experiment(min_ev: float, max_ev: float, lower_dim: int, upper_dim: int, gd_num_iterations: int, initial_point_samples_num: int, experiment_name: str, null_space_dims: tuple = (0, 5), device_num: int = 1) -> None:
-        with jax.default_device(jax.devices("cuda")[1]):
-            for curr_dim in mo.status.progress_bar(range(lower_dim, upper_dim + 1), title="Dimension of function", show_eta=True, show_rate=True):
-
-
-                results = {
-                    "dimension": [],
-                    "kernel_size": [],
-                    "initial_point_index": [],
-                    "iteration": [],
-                    "function_value": [],
-                    "gradient_norm": [],
-                    "learning_rate": [], 
-                    "max_eigenvalue": [],
-                    "min_eigenvalue": [],
-                    "max_eigenvalue_inverse": [],
-                }
-
-                for null_space_dim_curr in null_space_dims:
-                    f = QuadraticForm(min_ev, max_ev, curr_dim, null_space_dim_curr)
-                    f.convert_to_jax()
-
-
-
-                    for init_point_idx in mo.status.progress_bar(range(initial_point_samples_num), title="Initial point", show_eta=True, show_rate=True):
-                        x = jax.random.uniform(
-                            key = jax.random.PRNGKey(curr_dim),
-                            shape=(curr_dim,),
-                        )
-
-                        x /= jnp.linalg.norm(x)
-                        x *= 100000
-
-                        with mo.status.spinner(subtitle="Descending...") as _spinner:
-                            for i in range(gd_num_iterations):
-                                grad_i = f.calculate_gradient(x)
-                                lambda_i = (grad_i.T @ grad_i) / (grad_i.T @ f.A @grad_i)
-
-                                if True or i < 100 or i % 100 == 0:
-
-                                    results["dimension"].append(curr_dim)
-                                    results["kernel_size"].append(null_space_dim_curr)
-                                    results["max_eigenvalue"].append(f.eigen_vals[-1])
-                                    results["min_eigenvalue"].append(f.eigen_vals[null_space_dim_curr])
-                                    results["max_eigenvalue_inverse"].append(1 / f.eigen_vals[-1])
-                                    results["initial_point_index"].append(init_point_idx)
-                                    results["iteration"].append(i)
-                                    results["function_value"].append(f.calculate_function(x))
-
-                                    grad_norm = jnp.linalg.norm(grad_i)
-
-                                    results["gradient_norm"].append(grad_norm)
-                                    results["learning_rate"].append(lambda_i)
-
-                                    _spinner.update(f"max_ev: {f.eigen_vals[-1]}, min_ev: {f.eigen_vals[null_space_dim_curr]}, max_ev_inv: {1 / f.eigen_vals[-1]}, lr: {lambda_i}, gradient norm: {grad_norm}") 
-
-                                x -= lambda_i * grad_i
-
-                results_table = pl.DataFrame(results)
-
-                save_path = Path(f"./data/{experiment_name}")
-                save_path.mkdir(parents=True, exist_ok=True)
-
-                results_table.write_parquet(save_path / f"gd_results_{curr_dim}.parquet")
-    return (run_experiment,)
+    return gd_num_iterations, initial_point_samples_num, lower_dim, upper_dim
 
 
 @app.cell
 def _(
-    exp_name,
     gd_num_iterations,
     initial_point_samples_num,
     lower_dim,
@@ -225,25 +146,114 @@ def _(
             mo.hstack([mo.md("Maximum dimension of quadratic form"), upper_dim]),
             mo.hstack([mo.md("Initial point samples per quadratic form"), initial_point_samples_num]),
             mo.hstack([mo.md("G.D. number of iterations"), gd_num_iterations]),
-            mo.md(f"Input experiment name: {exp_name}")
         ]
     )
     return
 
 
 @app.cell
+def _(jax):
+    jax.devices()
+    return
+
+
+@app.cell
+def _():
+    device = "cuda:1"
+    return
+
+
+@app.cell
+def _():
+    results = {
+        "dimension": [],
+        "kernel_size": [],
+        "initial_point_index": [],
+        "iteration": [],
+        "function_value": [],
+        "gradient_norm": [],
+        "learning_rate": [], 
+        "max_eigenvalue": [],
+        "min_eigenvalue": [],
+        "max_eigenvalue_inverse": [],
+    }
+    return (results,)
+
+
+@app.cell
 def _(
-    exp_name,
+    QuadraticForm,
     gd_num_iterations,
     initial_point_samples_num,
+    jax,
+    jnp,
     lower_dim,
     max_ev,
     min_ev,
-    run_experiment,
+    mo,
+    results,
     upper_dim,
 ):
-    run_experiment(min_ev=min_ev.value, max_ev=max_ev.value, lower_dim = lower_dim.value, upper_dim = upper_dim.value, gd_num_iterations = gd_num_iterations.value, initial_point_samples_num=initial_point_samples_num.value, experiment_name=exp_name.value, device_num = 1)
+    with jax.default_device(jax.devices()[1]):
+        for curr_dim in mo.status.progress_bar(range(lower_dim.value, upper_dim.value + 1), title="Dimension of function", show_eta=True, show_rate=True):
+            for null_space_dim_curr in (0, 5):
+                f = QuadraticForm(min_ev.value, max_ev.value, curr_dim, null_space_dim_curr)
+                f.convert_to_jax()
+
+
+
+                for init_point_idx in mo.status.progress_bar(range(initial_point_samples_num.value), title="Initial point", show_eta=True, show_rate=True):
+                    x = jax.random.uniform(
+                        key = jax.random.PRNGKey(curr_dim),
+                        shape=(curr_dim,),
+                    )
+
+                    x /= jnp.linalg.norm(x)
+                    x *= 100000
+
+                    with mo.status.spinner(subtitle="Descending...") as _spinner:
+                        for i in range(gd_num_iterations.value):
+                            grad_i = f.calculate_gradient(x)
+                            lambda_i = (grad_i.T @ grad_i) / (grad_i.T @ f.A @grad_i)
+
+                            if True or i < 100 or i % 100 == 0:
+
+                                results["dimension"].append(curr_dim)
+                                results["kernel_size"].append(null_space_dim_curr)
+                                results["max_eigenvalue"].append(f.eigen_vals[-1])
+                                results["min_eigenvalue"].append(f.eigen_vals[null_space_dim_curr])
+                                results["max_eigenvalue_inverse"].append(1 / f.eigen_vals[-1])
+                                results["initial_point_index"].append(init_point_idx)
+                                results["iteration"].append(i)
+                                results["function_value"].append(f.calculate_function(x))
+
+                                grad_norm = jnp.linalg.norm(grad_i)
+
+                                results["gradient_norm"].append(grad_norm)
+                                results["learning_rate"].append(lambda_i)
+
+                                _spinner.update(f"max_ev: {f.eigen_vals[-1]}, min_ev: {f.eigen_vals[null_space_dim_curr]}, max_ev_inv: {1 / f.eigen_vals[-1]}, lr: {lambda_i}, gradient norm: {grad_norm}") 
+
+                            x -= lambda_i * grad_i
     return
+
+
+@app.cell
+def _(pl, results):
+    results_df = pl.DataFrame(results)
+    return (results_df,)
+
+
+@app.cell
+def _(results_df):
+    results_df.write_parquet("quadratic_forms_2000iters_15to20_oscilation_test.parquet")
+    return
+
+
+@app.cell
+def _(results_df):
+    results_df_test = results_df
+    return (results_df_test,)
 
 
 @app.cell(hide_code=True)
@@ -255,26 +265,12 @@ def _(mo):
 
 
 @app.cell
-def _(Path, exp_name, pl):
-    results_df_test = pl.read_parquet(
-        list(Path(f"data/{exp_name.value}").rglob("*.parquet"))
-    )
-    return (results_df_test,)
-
-
-@app.cell
 def _(pl, results_df_test):
     results_lr_hyp = results_df_test.with_columns(
-        pl.lit(2).truediv(pl.col("max_eigenvalue").add(pl.col("min_eigenvalue"))).alias("best_lr"),
-        pl.lit(1).truediv(pl.col("max_eigenvalue").add(pl.col("min_eigenvalue"))).alias("half_best_lr"),
-        pl.lit(1).truediv(pl.col("max_eigenvalue")).alias("max_ev_inv"),
-        pl.lit(1).truediv(pl.col("min_eigenvalue")).alias("min_ev_inv"),
+    pl.lit(2).truediv(pl.col("max_eigenvalue").add(pl.col("min_eigenvalue"))).alias("best_lr")
     ).with_columns(
-        pl.col("learning_rate").sub(pl.col("best_lr")).abs().alias("lr_error"),
-        harmonic_mean_pair = (
-            2 / (1 / pl.col("learning_rate")).sum()
-        ).over(pl.int_range(0, pl.len()) // 2) 
-    )
+        pl.col("learning_rate").sub(pl.col("best_lr")).abs().alias("lr_error")
+    ).group_by("dimension", "kernel_size", "initial_point_index").agg("iteration", "gradient_norm", "learning_rate", "best_lr", "lr_error", "min_eigenvalue", "max_eigenvalue").explode("iteration", "gradient_norm", "learning_rate", "best_lr", "lr_error", "min_eigenvalue", "max_eigenvalue")
     return (results_lr_hyp,)
 
 
@@ -289,7 +285,7 @@ def _(mo, results_lr_hyp):
     dim_to_plot = mo.ui.dropdown(options=results_lr_hyp["dimension"].unique())
     ker_to_plot = mo.ui.dropdown(options=results_lr_hyp["kernel_size"].unique())
     init_point_to_plot = mo.ui.dropdown(options=results_lr_hyp["initial_point_index"].unique())
-    what_to_plot = mo.ui.multiselect(options=["gradient_norm", "learning_rate", "best_lr", "lr_error", "harmonic_mean_pair", "min_ev_inv", "max_ev_inv"])
+    what_to_plot = mo.ui.dropdown(options=["gradient_norm", "learning_rate", "best_lr", "lr_error"])
     return dim_to_plot, init_point_to_plot, ker_to_plot, what_to_plot
 
 
@@ -320,24 +316,41 @@ def _(
     chosen_data = results_lr_hyp.filter(pl.col("dimension").eq(dim_to_plot.value) 
                                         & pl.col("kernel_size").eq(ker_to_plot.value)
                                         & pl.col("initial_point_index").eq(init_point_to_plot.value) 
+                                       ).with_columns(
+                                        pl.lit(1).truediv(pl.col("min_eigenvalue")).alias("min_ev_inv"),  
+                                        pl.lit(1).truediv(pl.col("max_eigenvalue")).alias("max_ev_inv"),  
                                        )
 
 
+    y_axis = what_to_plot.value
+    y_min, y_max = chosen_data[y_axis].min(), chosen_data[y_axis].max()
 
     fig = make_subplots(rows=1, cols=1, shared_xaxes=True, shared_yaxes=True)
-    colors = ["#FDFD96", "#FFD1DC", ]
 
-    for i ,y_axis in enumerate(what_to_plot.value):
+    fig.add_trace(go.Scatter(x=chosen_data["iteration"], y=chosen_data["best_lr"],
+                             mode='markers',
+                        marker={"color":"#FDFD96"}, name="Optimal learning rate"),
+                  1, 1)
+    fig.add_trace(go.Scatter(x=chosen_data["iteration"], y=chosen_data[y_axis],
+                            mode='markers', 
+                        marker={"color":"#FFD1DC"}, name=y_axis),
+                  1, 1)
 
-        fig.add_trace(go.Scatter(x=chosen_data["iteration"], y=chosen_data[y_axis],
-                                 mode='markers',
-                            name=y_axis),
-                      1, 1)
+    fig.add_trace(go.Scatter(x=chosen_data["iteration"], y=chosen_data["min_ev_inv"],
+                            mode='markers', 
+                        marker={"color":"#C1E1C1"}, name="Minimum eigenvalue inverse"),
+                  1, 1)
+
+    fig.add_trace(go.Scatter(x=chosen_data["iteration"], y=chosen_data["max_ev_inv"],
+                            mode='markers', 
+                        marker={"color":"#C5D0E6"}, name="Maximum eigenvalue inverse"),
+                  1, 1)
 
     fig.update_xaxes(title_text="Iteration Number")
     fig.update_yaxes(title_text="Value (Inverse Eigenvalue / Learning Rate)")
     fig.update_layout()
     fig.show()
+
     return
 
 
