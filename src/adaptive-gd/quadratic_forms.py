@@ -295,7 +295,7 @@ def _(mo, results_lr_hyp):
 
 @app.cell
 def _(dim_to_plot, init_point_to_plot, ker_to_plot, mo, what_to_plot):
-    mo.vstack(
+    plot_constructor = mo.vstack(
         [
             mo.hstack([mo.md("Dim of function"), dim_to_plot]),
             mo.hstack([mo.md("Kernel size of function"), ker_to_plot]),
@@ -303,7 +303,7 @@ def _(dim_to_plot, init_point_to_plot, ker_to_plot, mo, what_to_plot):
             mo.hstack([mo.md("What to plot on y-axis?"), what_to_plot]),
         ]
     )
-    return
+    return (plot_constructor,)
 
 
 @app.cell
@@ -313,6 +313,7 @@ def _(
     init_point_to_plot,
     ker_to_plot,
     make_subplots,
+    mo,
     pl,
     results_lr_hyp,
     what_to_plot,
@@ -337,7 +338,13 @@ def _(
     fig.update_xaxes(title_text="Iteration Number")
     fig.update_yaxes(title_text="Value (Inverse Eigenvalue / Learning Rate)")
     fig.update_layout()
-    fig.show()
+    gd_results_plot = mo.ui.plotly(fig)
+    return (gd_results_plot,)
+
+
+@app.cell
+def _(gd_results_plot, mo, plot_constructor):
+    mo.vstack([plot_constructor, gd_results_plot])
     return
 
 
