@@ -22,10 +22,23 @@ def _():
     from plotly.subplots import make_subplots
     import plotly.graph_objects as go
 
-    from scipy.stats import ortho_group
+    from scipy.stats import ortho_group, wilcoxon
+
 
     from pathlib import Path
-    return NDArray, Path, go, jax, jnp, make_subplots, np, ortho_group, pl
+    return (
+        NDArray,
+        Path,
+        go,
+        jax,
+        jnp,
+        make_subplots,
+        np,
+        ortho_group,
+        pl,
+        px,
+        wilcoxon,
+    )
 
 
 @app.cell
@@ -78,6 +91,8 @@ def _(NDArray, gen_eigenvalues, gen_eigenvectors, jnp, np):
 
             self.A = eigen_vecs @ jordan_form @ inv_eigen_vec
 
+            self.min_value = self.calculate_function(self._find_minimal_value())
+
         def convert_to_jax(self) -> None:
             self.A = jnp.array(self.A)
             self.b = jnp.array(self.b)
@@ -87,6 +102,10 @@ def _(NDArray, gen_eigenvalues, gen_eigenvectors, jnp, np):
 
         def calculate_function(self, x: NDArray | jnp.ndarray) -> NDArray | jnp.ndarray:
             return 0.5 * x.T @ self.A @ x - self.b @ x
+
+        def _find_minimal_value(self) -> float:
+            x, *_ = jnp.linalg.lstsq(self.A, self.b)
+            return x
     return (QuadraticForm,)
 
 
@@ -114,7 +133,6 @@ def _(mo):
     dim_step = mo.ui.number()
     return (
         dim_step,
-        exp_name,
         gd_num_iterations,
         initial_point_samples_num,
         lower_dim,
@@ -229,7 +247,7 @@ def _(Path, QuadraticForm, jax, jnp, mo, pl):
 
 @app.cell
 def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
-    def run_experiment_adgd(
+    def run_experiment_adg(
         gd_num_iterations: int,
         experiment_name: str,
         quadratic_forms: list[QuadraticForm],
@@ -254,6 +272,9 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
                     "learning_rate": [],
                     "max_eigenvalue": [],
                     "min_eigenvalue": [],
+                    "left_choice_num": [],
+                    "right_choice_num": [],
+                    "loss": [],
                 }
 
                 for init_point_idx, x in mo.status.progress_bar(
@@ -270,17 +291,24 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
                         x_prev = x.copy()
                         grad_prev = f.calculate_gradient(x)
 
+                        left_choice_num = 0
+                        right_choice_num = 0
+
                         x -= lambda_i * grad_prev
 
                         for i in range(gd_num_iterations):
                             grad_i = f.calculate_gradient(x)
 
-                            lambda_i = min(
-                                (
-                                    jnp.sqrt(1 + theta_i) * lambda_prev,
-                                    jnp.linalg.norm(x - x_prev) / (2 * jnp.linalg.norm(grad_prev - grad_i)),
-                                )
-                            )
+                            left_option = jnp.sqrt(1 + theta_i) * lambda_prev
+                            right_option = jnp.linalg.norm(x - x_prev) / (2 * jnp.linalg.norm(grad_prev - grad_i))
+
+                            if left_option < right_option:
+                                lambda_i = left_option
+                                left_choice_num += 1
+
+                            else:
+                                lambda_i = right_option
+                                right_choice_num += 1
 
                             x_prev = x
                             grad_prev = grad_i
@@ -299,8 +327,13 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
 
                             grad_norm = jnp.linalg.norm(grad_i)
 
+                            results["left_choice_num"].append(left_choice_num)
+                            results["right_choice_num"].append(right_choice_num)
+
                             results["gradient_norm"].append(grad_norm)
                             results["learning_rate"].append(lambda_i)
+
+                            results["loss"].append(f.calculate_function(x) - f.min_value)
 
                             _spinner.update(
                                 f"max_ev: {f.max_ev}, min_ev: {f.min_ev}, max_ev_inv: {1 / f.max_ev}, lr: {lambda_i}, gradient norm: {grad_norm}"
@@ -312,7 +345,7 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
                 save_path.mkdir(parents=True, exist_ok=True)
 
                 results_table.write_parquet(save_path / f"gd_results_{f.dim}_{f.null_space_dim}.parquet")
-    return (run_experiment_adgd,)
+    return (run_experiment_adg,)
 
 
 @app.cell
@@ -344,6 +377,7 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
                     "min_eigenvalue": [],
                     "left_choice_num": [],
                     "right_choice_num": [],
+                    "loss": [],
                 }
 
                 for init_point_idx, x in mo.status.progress_bar(
@@ -402,6 +436,8 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
                             results["left_choice_num"].append(left_choice_num)
                             results["right_choice_num"].append(right_choice_num)
 
+                            results["loss"].append(f.calculate_function(x) - f.min_value)
+
                             _spinner.update(
                                 f"max_ev: {f.max_ev}, min_ev: {f.min_ev}, max_ev_inv: {1 / f.max_ev}, lr: {lambda_i}, gradient norm: {grad_norm}"
                             )
@@ -418,7 +454,6 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
 @app.cell
 def _(
     dim_step,
-    exp_name,
     gd_num_iterations,
     initial_point_samples_num,
     lower_dim,
@@ -435,7 +470,6 @@ def _(
             mo.hstack([mo.md("Maximum dimension of quadratic form"), upper_dim]),
             mo.hstack([mo.md("Initial point samples per quadratic form"), initial_point_samples_num]),
             mo.hstack([mo.md("G.D. number of iterations"), gd_num_iterations]),
-            mo.md(f"Input experiment name: {exp_name}"),
             mo.md(f"Dimension step: {dim_step}"),
         ]
     )
@@ -465,16 +499,10 @@ def _(
 
 
 @app.cell
-def _(
-    exp_name,
-    gd_num_iterations,
-    initial_points,
-    quadratic_forms,
-    run_experiment_adgd,
-):
-    run_experiment_adgd(
+def _(gd_num_iterations, initial_points, quadratic_forms, run_experiment_adg):
+    run_experiment_adg(
         gd_num_iterations=gd_num_iterations.value,
-        experiment_name=exp_name.value,
+        experiment_name="standard_adg",
         quadratic_forms=quadratic_forms,
         initial_point_samples_per_form=initial_points,
         device_num=0,
@@ -484,7 +512,6 @@ def _(
 
 @app.cell
 def _(
-    exp_name,
     gd_num_iterations,
     initial_points,
     quadratic_forms,
@@ -492,7 +519,7 @@ def _(
 ):
     run_experiment_adg_quadratic(
         gd_num_iterations=gd_num_iterations.value,
-        experiment_name=exp_name.value,
+        experiment_name="adg_quadratic_improved",
         quadratic_forms=quadratic_forms,
         initial_point_samples_per_form=initial_points,
         device_num=0,
@@ -500,47 +527,89 @@ def _(
     return
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    Hypothesis whether learning rate converges to $\frac{2}{\lambda_{\min} + \lambda_{\max}}$
-    """)
-    return
+@app.cell
+def _(pl):
+    def preprocess_data(data: pl.DataFrame) -> pl.DataFrame:
+        return data.with_columns(
+            pl.lit(2).truediv(pl.col("max_eigenvalue").add(pl.col("min_eigenvalue"))).alias("best_lr"),
+            pl.lit(1).truediv(pl.col("max_eigenvalue").add(pl.col("min_eigenvalue"))).alias("half_best_lr"),
+            pl.lit(1).truediv(pl.col("max_eigenvalue")).alias("max_ev_inv"),
+            pl.lit(1).truediv(pl.col("min_eigenvalue")).alias("min_ev_inv"),
+        ).with_columns(
+            pl.col("learning_rate").sub(pl.col("best_lr")).abs().alias("lr_error"),
+            harmonic_mean_pair=(2 / (1 / pl.col("learning_rate")).sum()).over(pl.int_range(0, pl.len()) // 2),
+        )
+    return (preprocess_data,)
 
 
 @app.cell
-def _(Path, exp_name, pl):
-    results_df_test = pl.read_parquet(list(Path(f"data/{exp_name.value}").rglob("*.parquet")))
-    return (results_df_test,)
+def _(Path):
+    data_path = Path("data/")
+    experiments_data_dirs = [exp_dir for exp_dir in data_path.iterdir() if exp_dir.is_dir()]
+    return (experiments_data_dirs,)
 
 
 @app.cell
-def _(pl, results_df_test):
-    results_lr_hyp = results_df_test.with_columns(
-        pl.lit(2).truediv(pl.col("max_eigenvalue").add(pl.col("min_eigenvalue"))).alias("best_lr"),
-        pl.lit(1).truediv(pl.col("max_eigenvalue").add(pl.col("min_eigenvalue"))).alias("half_best_lr"),
-        pl.lit(1).truediv(pl.col("max_eigenvalue")).alias("max_ev_inv"),
-        pl.lit(1).truediv(pl.col("min_eigenvalue")).alias("min_ev_inv"),
-    ).with_columns(
-        pl.col("learning_rate").sub(pl.col("best_lr")).abs().alias("lr_error"),
-        harmonic_mean_pair=(2 / (1 / pl.col("learning_rate")).sum()).over(pl.int_range(0, pl.len()) // 2),
+def _(experiments_data_dirs, mo):
+    left_plot_data = mo.ui.dropdown(options=experiments_data_dirs, label="Left data to plot")
+    right_plot_data = mo.ui.dropdown(options=experiments_data_dirs, label="Left data to plot")
+    return left_plot_data, right_plot_data
+
+
+@app.cell
+def _(left_plot_data, mo, right_plot_data):
+    mo.vstack(
+        [
+            mo.hstack([left_plot_data, right_plot_data]),
+        ]
     )
-    return (results_lr_hyp,)
-
-
-@app.cell
-def _(mo, results_lr_hyp):
-    mo.ui.dataframe(results_lr_hyp)
     return
 
 
 @app.cell
-def _(mo, results_lr_hyp):
-    dim_to_plot = mo.ui.dropdown(options=results_lr_hyp["dimension"].unique())
-    ker_to_plot = mo.ui.dropdown(options=results_lr_hyp["kernel_size"].unique())
-    init_point_to_plot = mo.ui.dropdown(options=results_lr_hyp["initial_point_index"].unique())
+def _(left_plot_data, pl, preprocess_data, right_plot_data):
+    left_data = preprocess_data(pl.read_parquet(list(left_plot_data.value.rglob("*.parquet"))))
+    right_data = preprocess_data(pl.read_parquet(list(right_plot_data.value.rglob("*.parquet"))))
+    return left_data, right_data
+
+
+@app.cell
+def _(left_data, pl, right_data, wilcoxon):
+    hypotheses_test = left_data.join(
+        right_data.select("dimension", "kernel_size", "initial_point_index", "iteration", pl.col("loss").alias("lossRight")), on=("dimension", "kernel_size", "initial_point_index", "iteration"), how="left"
+    ).group_by("dimension", "kernel_size", "initial_point_index").agg("loss", "lossRight").with_columns(
+       pl.struct(["loss", "lossRight"]).map_elements(
+            lambda x: wilcoxon(x["loss"], x["lossRight"], alternative="greater").pvalue,
+            return_dtype=pl.Float64
+        ).alias("p_value") 
+    )
+    return (hypotheses_test,)
+
+
+@app.cell
+def _(hypotheses_test, mo):
+    mo.ui.dataframe(hypotheses_test)
+    return
+
+
+@app.cell
+def _(left_data, mo):
+    dim_to_plot = mo.ui.dropdown(options=left_data["dimension"].unique())
+    ker_to_plot = mo.ui.dropdown(options=left_data["kernel_size"].unique())
+    init_point_to_plot = mo.ui.dropdown(options=left_data["initial_point_index"].unique())
     what_to_plot = mo.ui.multiselect(
-        options=["gradient_norm", "learning_rate", "best_lr", "lr_error", "harmonic_mean_pair", "min_ev_inv", "max_ev_inv", "left_choice_num", "right_choice_num"]
+        options=[
+            "gradient_norm",
+            "learning_rate",
+            "best_lr",
+            "lr_error",
+            "harmonic_mean_pair",
+            "min_ev_inv",
+            "max_ev_inv",
+            "left_choice_num",
+            "right_choice_num",
+            "loss",
+        ]
     )
     return dim_to_plot, init_point_to_plot, ker_to_plot, what_to_plot
 
@@ -564,38 +633,61 @@ def _(
     go,
     init_point_to_plot,
     ker_to_plot,
+    left_data,
     make_subplots,
     mo,
     pl,
-    results_lr_hyp,
+    px,
+    right_data,
     what_to_plot,
 ):
-    chosen_data = results_lr_hyp.filter(
+    left_chosen_data = left_data.filter(
+        pl.col("dimension").eq(dim_to_plot.value)
+        & pl.col("kernel_size").eq(ker_to_plot.value)
+        & pl.col("initial_point_index").eq(init_point_to_plot.value)
+    )
+    right_chosen_data = right_data.filter(
         pl.col("dimension").eq(dim_to_plot.value)
         & pl.col("kernel_size").eq(ker_to_plot.value)
         & pl.col("initial_point_index").eq(init_point_to_plot.value)
     )
 
 
-    fig = make_subplots(rows=1, cols=1, shared_xaxes=True, shared_yaxes=True)
+    fig = make_subplots(rows=1, cols=2, shared_xaxes=True, shared_yaxes=True)
     colors = [
         "#FDFD96",
         "#FFD1DC",
     ]
 
     for i, y_axis in enumerate(what_to_plot.value):
-        fig.add_trace(go.Scatter(x=chosen_data["iteration"], y=chosen_data[y_axis], mode="markers", name=y_axis), 1, 1)
+        fig.add_trace(
+            go.Scatter(x=left_chosen_data["iteration"], y=left_chosen_data[y_axis], mode="markers", name=y_axis), 1, 1
+        )
+        fig.add_trace(
+            go.Scatter(x=right_chosen_data["iteration"], y=right_chosen_data[y_axis], mode="markers", name=y_axis), 1, 2
+        )
 
     fig.update_xaxes(title_text="Iteration Number")
     fig.update_yaxes(title_text="Value (Inverse Eigenvalue / Learning Rate)")
     fig.update_layout()
+
+    joined_left_right = left_chosen_data.join(
+        right_chosen_data.select("iteration", pl.col("loss").alias("loss_right")), on="iteration", how="left"
+    ).with_columns(
+        pl.col("loss").sub(pl.col("loss_right")).alias("LossDifference")
+    )
+
+    fig_diff = px.scatter(joined_left_right, x="iteration", y = "LossDifference")
+
+
     gd_results_plot = mo.ui.plotly(fig)
-    return (gd_results_plot,)
+    fig_diff_plot = mo.ui.plotly(fig_diff)
+    return fig_diff_plot, gd_results_plot
 
 
 @app.cell
-def _(gd_results_plot, mo, plot_constructor):
-    mo.vstack([plot_constructor, gd_results_plot])
+def _(fig_diff_plot, gd_results_plot, mo, plot_constructor):
+    mo.vstack([plot_constructor, gd_results_plot, fig_diff_plot])
     return
 
 
