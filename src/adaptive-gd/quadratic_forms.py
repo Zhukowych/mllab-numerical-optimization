@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.18.1"
+__generated_with = "0.18.4"
 app = marimo.App(width="medium")
 
 with app.setup:
@@ -87,9 +87,8 @@ def _(NDArray, gen_eigenvalues, gen_eigenvectors, jnp, np):
             eigen_vecs = gen_eigenvectors(dim=dim)
             inv_eigen_vec = np.linalg.inv(eigen_vecs)
 
-            self.b = np.random.rand(dim)
-
             self.A = eigen_vecs @ jordan_form @ inv_eigen_vec
+            self.b = self.A @ np.random.rand(dim)
 
             self.min_value = self.calculate_function(self._find_minimal_value())
 
@@ -104,18 +103,9 @@ def _(NDArray, gen_eigenvalues, gen_eigenvectors, jnp, np):
             return 0.5 * x.T @ self.A @ x - self.b @ x
 
         def _find_minimal_value(self) -> float:
-            x, *_ = jnp.linalg.lstsq(self.A, self.b)
+            x = jnp.linalg.solve(self.A, self.b)
             return x
     return (QuadraticForm,)
-
-
-@app.cell
-def _(mo):
-    mo.md(r"""
-    # Convergence test
-    For step $\frac{\nabla f(x) ^ \top \nabla f(x)}{\nabla f(x) ^ \top A\nabla f(x)}$, experimentaly test whether it convegece to $\frac{2}{\lambda_{\min} + \lambda_{\max}}$
-    """)
-    return
 
 
 @app.cell
@@ -167,7 +157,12 @@ def _(QuadraticForm, jnp, np):
                 q_forms.append(q_form)
 
                 initial_point_samples = [
-                    jnp.array(np.random.uniform(size=dim) * 1_000_000) for _ in range(initial_point_samples_num)
+                    q_form.A @ jnp.array(np.random.uniform(size=dim)) for _ in range(initial_point_samples_num)
+                ]
+
+                initial_point_samples_norms = [jnp.linalg.norm(pt) for pt in initial_point_samples]
+                initial_point_samples = [
+                    pt / norm * 10.0 if norm > 0 else pt for pt, norm in zip(initial_point_samples, initial_point_samples_norms)
                 ]
 
                 initial_point_samples_per_form.append(initial_point_samples)
@@ -502,7 +497,7 @@ def _(
 def _(gd_num_iterations, initial_points, quadratic_forms, run_experiment_adg):
     run_experiment_adg(
         gd_num_iterations=gd_num_iterations.value,
-        experiment_name="standard_adg",
+        experiment_name="standard_adg_smaller",
         quadratic_forms=quadratic_forms,
         initial_point_samples_per_form=initial_points,
         device_num=0,
@@ -519,7 +514,7 @@ def _(
 ):
     run_experiment_adg_quadratic(
         gd_num_iterations=gd_num_iterations.value,
-        experiment_name="adg_quadratic_improved",
+        experiment_name="adg_quadratic_improved_smaller",
         quadratic_forms=quadratic_forms,
         initial_point_samples_per_form=initial_points,
         device_num=0,
@@ -575,9 +570,9 @@ def _(left_plot_data, pl, preprocess_data, right_plot_data):
 
 @app.cell
 def _(left_data, pl, right_data, wilcoxon):
-    hypotheses_test = left_data.join(
+    hypotheses_test: pl.DataFrame = left_data.join(
         right_data.select("dimension", "kernel_size", "initial_point_index", "iteration", pl.col("loss").alias("lossRight")), on=("dimension", "kernel_size", "initial_point_index", "iteration"), how="left"
-    ).group_by("dimension", "kernel_size", "initial_point_index").agg("loss", "lossRight").with_columns(
+    ).group_by("dimension", "kernel_size", "initial_point_index").agg("iteration","loss", "lossRight").with_columns(
        pl.struct(["loss", "lossRight"]).map_elements(
             lambda x: wilcoxon(x["loss"], x["lossRight"], alternative="greater").pvalue,
             return_dtype=pl.Float64
@@ -587,8 +582,22 @@ def _(left_data, pl, right_data, wilcoxon):
 
 
 @app.cell
-def _(hypotheses_test, mo):
-    mo.ui.dataframe(hypotheses_test)
+def _(hypotheses_test: "pl.DataFrame", mo, pl):
+    mo.ui.dataframe(hypotheses_test.filter(pl.col("p_value").ge(0.05)))
+    return
+
+
+@app.cell
+def _(hypotheses_test: "pl.DataFrame", pl):
+    conv_speed_hypotheses_test = hypotheses_test.explode("iteration", "loss", "lossRight").filter(pl.col("iteration").le(100)).group_by("dimension", "kernel_size", "initial_point_index").agg(
+        pl.col("loss").truediv(pl.col("lossRight")).mean().alias("conv_speed_ratio"),
+    ).filter(pl.col("conv_speed_ratio").le(1.5))
+    return (conv_speed_hypotheses_test,)
+
+
+@app.cell
+def _(conv_speed_hypotheses_test, mo):
+    mo.ui.dataframe(conv_speed_hypotheses_test)
     return
 
 
@@ -629,6 +638,7 @@ def _(dim_to_plot, init_point_to_plot, ker_to_plot, mo, what_to_plot):
 
 @app.cell
 def _(
+    conv_speed_hypotheses_test,
     dim_to_plot,
     go,
     init_point_to_plot,
@@ -671,13 +681,14 @@ def _(
     fig.update_yaxes(title_text="Value (Inverse Eigenvalue / Learning Rate)")
     fig.update_layout()
 
-    joined_left_right = left_chosen_data.join(
-        right_chosen_data.select("iteration", pl.col("loss").alias("loss_right")), on="iteration", how="left"
-    ).with_columns(
-        pl.col("loss").sub(pl.col("loss_right")).alias("LossDifference")
+
+    joined_left_right = conv_speed_hypotheses_test.drop_nulls().filter(
+        pl.col("dimension").eq(dim_to_plot.value)
+        & pl.col("kernel_size").eq(ker_to_plot.value)
+        & pl.col("initial_point_index").eq(init_point_to_plot.value)
     )
 
-    fig_diff = px.scatter(joined_left_right, x="iteration", y = "LossDifference")
+    fig_diff = px.scatter(joined_left_right, x="iteration", y = "conv_speed_ratio")
 
 
     gd_results_plot = mo.ui.plotly(fig)
