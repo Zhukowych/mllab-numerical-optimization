@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.18.1"
+__generated_with = "0.19.4"
 app = marimo.App(width="medium")
 
 with app.setup:
@@ -210,6 +210,7 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
                     show_eta=True,
                     show_rate=True,
                     total=len(initial_point_samples),
+                    remove_on_exit=True,
                 ):
                     with mo.status.spinner(subtitle="Descending...") as _spinner:
                         lambda_prev = 1e-10
@@ -310,6 +311,7 @@ def _(Path, QuadraticForm, jax, jnp, mo, pl):
                     show_eta=True,
                     show_rate=True,
                     total=len(initial_point_samples),
+                    remove_on_exit=True
                 ):
                     with mo.status.spinner(subtitle="Descending...") as _spinner:
                         lr = 1 / f.max_ev
@@ -372,9 +374,64 @@ def _(
 
 
 @app.cell
-def _():
-    general_experiment_path = "data/adg_vs_optimal"
+def _(Path):
+    general_experiment_path = Path("data/adg_vs_optimal")
     return (general_experiment_path,)
+
+
+@app.cell
+def _(
+    Path,
+    dim_step,
+    gd_num_iterations,
+    general_experiment_path,
+    generate_quadratic_forms,
+    initial_point_samples_num,
+    lower_dim,
+    rng,
+    run_experiment_adg,
+    run_experiment_optimal_step,
+    upper_dim,
+):
+    def run_experiment_adg_vs_optimal(
+        exp_name: Path,
+        dist_method=rng.uniform,
+        null_space_dims: tuple = (0, 5),
+        device_num: int=0,
+    
+        **kwargs,
+    
+    ):
+        quadratic_forms, initial_points = generate_quadratic_forms(
+            lower_dim=lower_dim.value,
+            upper_dim=upper_dim.value,
+            dim_step=dim_step.value,
+            initial_point_samples_num=initial_point_samples_num.value,
+            save_path=general_experiment_path / exp_name,
+            dist_method=dist_method,
+            null_space_dims=null_space_dims,
+            **kwargs,
+        )
+
+        run_experiment_adg(
+            gd_num_iterations=gd_num_iterations.value,
+            experiment_name="adg_quadratic_quadratic_3%4",
+            save_path=general_experiment_path / exp_name,
+            quadratic_forms=quadratic_forms,
+            initial_point_samples_per_form=initial_points,
+            beta=0.75,
+            device_num=device_num,
+        )
+    
+        run_experiment_optimal_step(
+            gd_num_iterations=gd_num_iterations.value,
+            experiment_name="gd_optimal_step",
+            save_path=general_experiment_path / exp_name,
+            quadratic_forms=quadratic_forms,
+            initial_point_samples_per_form=initial_points,
+            device_num=device_num,
+        )
+    return (run_experiment_adg_vs_optimal,)
 
 
 @app.cell(hide_code=True)
@@ -386,76 +443,15 @@ def _(mo):
 
 
 @app.cell
-def _(general_experiment_path, mo):
-    save_path_uniform = mo.ui.text(value=f"{general_experiment_path}/uniform/", full_width=True)
-    mo.md(f"Save path for this experiment: {save_path_uniform}")
-    return (save_path_uniform,)
-
-
-@app.cell
-def _(
-    Path,
-    dim_step,
-    generate_quadratic_forms,
-    initial_point_samples_num,
-    lower_dim,
-    max_ev,
-    min_ev,
-    rng,
-    save_path_uniform,
-    upper_dim,
-):
-    quadratic_forms, initial_points = generate_quadratic_forms(
-        lower_dim=lower_dim.value,
-        upper_dim=upper_dim.value,
-        dim_step=dim_step.value,
-        initial_point_samples_num=initial_point_samples_num.value,
-        save_path=Path(save_path_uniform.value),
+def _(max_ev, min_ev, rng, run_experiment_adg_vs_optimal):
+    run_experiment_adg_vs_optimal(
+        exp_name="uniform", # CHANGE THIS
         dist_method=rng.uniform,
-        null_space_dims=(0, 5, 10, 15),
+        null_space_dims=(0,5,10,15),
+        device_num=0,
+        # KWARGS
         low=min_ev.value,
         high=max_ev.value,
-    )
-    return initial_points, quadratic_forms
-
-
-@app.cell
-def _(
-    Path,
-    gd_num_iterations,
-    initial_points,
-    quadratic_forms,
-    run_experiment_adg,
-    save_path_uniform,
-):
-    run_experiment_adg(
-        gd_num_iterations=gd_num_iterations.value,
-        experiment_name="adg_quadratic_quadratic_3%4",
-        save_path=Path(save_path_uniform.value),
-        quadratic_forms=quadratic_forms,
-        initial_point_samples_per_form=initial_points,
-        beta=0.75,
-        device_num=0,
-    )
-    return
-
-
-@app.cell
-def _(
-    Path,
-    gd_num_iterations,
-    initial_points,
-    quadratic_forms,
-    run_experiment_optimal_step,
-    save_path_uniform,
-):
-    run_experiment_optimal_step(
-        gd_num_iterations=gd_num_iterations.value,
-        experiment_name="gd_optimal_step",
-        save_path=Path(save_path_uniform.value),
-        quadratic_forms=quadratic_forms,
-        initial_point_samples_per_form=initial_points,
-        device_num=0,
     )
     return
 
@@ -469,74 +465,37 @@ def _(mo):
 
 
 @app.cell
-def _(general_experiment_path, mo):
-    save_path_beta_1_20 = mo.ui.text(value=f"{general_experiment_path}/beta_1_20/", full_width=True)
-    mo.md(f"Save path for this experiment: {save_path_beta_1_20}")
-    return (save_path_beta_1_20,)
-
-
-@app.cell
-def _(
-    Path,
-    dim_step,
-    generate_quadratic_forms,
-    initial_point_samples_num,
-    lower_dim,
-    rng,
-    save_path_beta_1_20,
-    upper_dim,
-):
-    quadratic_forms_beta_1_20, initial_points_beta_1_20 = generate_quadratic_forms(
-        lower_dim=lower_dim.value,
-        upper_dim=upper_dim.value,
-        dim_step=dim_step.value,
-        initial_point_samples_num=initial_point_samples_num.value,
-        save_path=Path(save_path_beta_1_20.value),
+def _(rng, run_experiment_adg_vs_optimal):
+    run_experiment_adg_vs_optimal(
+        exp_name="beta_1_20", # CHANGE THIS
         dist_method=rng.beta,
-        null_space_dims=(0, 5, 10, 15),
+        null_space_dims=(0,5,10,15),
+        device_num=0,
+        # KWARGS
         a=1,
         b=20,
-    )
-    return initial_points_beta_1_20, quadratic_forms_beta_1_20
-
-
-@app.cell
-def _(
-    Path,
-    gd_num_iterations,
-    initial_points_beta_1_20,
-    quadratic_forms_beta_1_20,
-    run_experiment_adg,
-    save_path_beta_1_20,
-):
-    run_experiment_adg(
-        gd_num_iterations=gd_num_iterations.value,
-        experiment_name="adg_quadratic_quadratic_3%4",
-        save_path=Path(save_path_beta_1_20.value),
-        quadratic_forms=quadratic_forms_beta_1_20,
-        initial_point_samples_per_form=initial_points_beta_1_20,
-        beta=0.75,
-        device_num=0,
     )
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### $B(\alpha=2, \beta=100)$ distribution
+    """)
+    return
+
+
 @app.cell
-def _(
-    Path,
-    gd_num_iterations,
-    initial_points_beta_1_20,
-    quadratic_forms_beta_1_20,
-    run_experiment_optimal_step,
-    save_path_beta_1_20,
-):
-    run_experiment_optimal_step(
-        gd_num_iterations=gd_num_iterations.value,
-        experiment_name="gd_optimal_step",
-        save_path=Path(save_path_beta_1_20.value),
-        quadratic_forms=quadratic_forms_beta_1_20,
-        initial_point_samples_per_form=initial_points_beta_1_20,
+def _(rng, run_experiment_adg_vs_optimal):
+    run_experiment_adg_vs_optimal(
+        exp_name="beta_2_100", # CHANGE THIS
+        dist_method=rng.beta,
+        null_space_dims=(0,5,10,15),
         device_num=0,
+        # KWARGS
+        a=2,
+        b=100,
     )
     return
 
@@ -598,11 +557,12 @@ def _(adg_data, optimal_step_data, pl, wilcoxon):
             on=("dimension", "kernel_size", "initial_point_index", "iteration"),
             how="left",
         )
+        .filter(pl.col("iteration").le(15))
         .group_by("dimension", "kernel_size", "initial_point_index")
         .agg("iteration", "loss", "lossRight")
         .with_columns(
             pl.struct(["loss", "lossRight"])
-            .map_elements(lambda x: wilcoxon(x["loss"], x["lossRight"]).pvalue, return_dtype=pl.Float64)
+            .map_elements(lambda x: wilcoxon(x["loss"], x["lossRight"], alternative="less").pvalue, return_dtype=pl.Float64)
             .alias("p_value")
         )
     )
