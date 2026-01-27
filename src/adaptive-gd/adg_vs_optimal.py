@@ -826,7 +826,7 @@ def _(
 
     for i, y_axis in enumerate(what_to_plot.value):
         fig.add_trace(
-            go.Scatter(x=left_chosen_data["iteration"], y=left_chosen_data[y_axis], mode="markers", name=f"{y_axis}, adg"),
+            go.Line(x=left_chosen_data["iteration"], y=left_chosen_data[y_axis], mode="markers", name=f"{y_axis}, adg"),
             1,
             1,
         )
@@ -890,13 +890,13 @@ def _(mo):
 
     #### Experiment notes
     - uniform distribution $[\lambda_{\min}, \lambda_{\max}]$, converges faster and has bigger step
-    - Beta($\alpha=2$, $\beta=100$) AGD converges faster than optimal step, step is bigger
-    - Beta($\alpha=100$, $\beta=24$) AGD converges slower, and learning rate is smaller too
+    - Beta($lpha=2$, $eta=100$) AGD converges faster than optimal step, step is bigger
+    - Beta($lpha=100$, $eta=24$) AGD converges slower, and learning rate is smaller too
 
     I tried to create more *extreme* spectral gap:
-    - All the eigenvalue are the $\lambda_{\min}$ and one is $\lambda_{\max}$. ADG converged slower. What is interesting that there are $\approx$ 200 functions that have this reversed. What is more interesting, that those are 200 functions that haven't converged.
+    - All the eigenvalue are the $\lambda_{\min}$ and one is $\lambda_{\max}$. ADG converged slower. What is interesting that there are $pprox$ 200 functions that have this reversed. What is more interesting, that those are 200 functions that haven't converged.
     - All the eigenvalue are the $\lambda_{\max}$ and one is $\lambda_{\min}$. ADG converged slower add had smaller step.
-    - All the eigenvalue are the $\lambda_{\min}$ and two are $\lambda_{\max}$ and $\lambda_{\max}-1$. ADG converged slower. What is interesting that there are $\approx$ 50 functions that have this reversed. What is more interesting, that those are 50 functions that haven't converged.
+    - All the eigenvalue are the $\lambda_{\min}$ and two are $\lambda_{\max}$ and $\lambda_{\max}-1$. ADG converged slower. What is interesting that there are $pprox$ 50 functions that have this reversed. What is more interesting, that those are 50 functions that haven't converged.
     """)
     return
 
