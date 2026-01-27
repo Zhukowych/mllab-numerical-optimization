@@ -631,6 +631,7 @@ def _(pl):
         return data.with_columns(
             pl.lit(1).truediv(pl.col("max_eigenvalue")).alias("max_ev_inv"),
             pl.lit(1).truediv(pl.col("min_eigenvalue")).alias("min_ev_inv"),
+            pl.col("loss").log().diff().name.suffix("_rate_of_change")
         )
     return (preprocess_data,)
 
@@ -704,6 +705,7 @@ def _(adg_data, convergence_threshold, optimal_step_data, pl, wilcoxon):
                 "iteration",
                 pl.col("loss").name.suffix("_optimal"),
                 pl.col("learning_rate").name.suffix("_optimal"),
+                pl.col("loss_rate_of_change").name.suffix("_optimal")
             ),
             on=("dimension", "kernel_size", "initial_point_index", "iteration"),
             how="left",
@@ -711,22 +713,22 @@ def _(adg_data, convergence_threshold, optimal_step_data, pl, wilcoxon):
         .filter(
             (pl.col("loss").ge(convergence_threshold.value) | pl.col("loss_optimal").ge(convergence_threshold.value))
             & (
-                pl.col("loss").gt(
+                pl.col("loss").lt(
                     pl.col("loss")
-                    .quantile(0.02, interpolation="linear")
+                    .quantile(0.98, interpolation="linear")
                     .over("dimension", "kernel_size", "initial_point_index")
                 )
             )
             & (
-                pl.col("loss_optimal").gt(
+                pl.col("loss_optimal").lt(
                     pl.col("loss_optimal")
-                    .quantile(0.02, interpolation="linear")
+                    .quantile(0.98, interpolation="linear")
                     .over("dimension", "kernel_size", "initial_point_index")
                 )
             )
         )
         .group_by("dimension", "kernel_size", "initial_point_index")
-        .agg("iteration", "loss", "loss_optimal", "learning_rate", "learning_rate_optimal")
+        .agg("iteration", "loss", "loss_optimal", "learning_rate", "learning_rate_optimal", "loss_rate_of_change", "loss_rate_of_change_optimal")
         .with_columns(
             pl.struct(["loss", "loss_optimal"])
             .map_elements(
@@ -826,7 +828,7 @@ def _(
 
     for i, y_axis in enumerate(what_to_plot.value):
         fig.add_trace(
-            go.Line(x=left_chosen_data["iteration"], y=left_chosen_data[y_axis], mode="markers", name=f"{y_axis}, adg"),
+            go.Line(x=left_chosen_data["iteration"], y=left_chosen_data[y_axis], mode="lines", name=f"{y_axis}, adg"),
             1,
             1,
         )
@@ -834,7 +836,7 @@ def _(
             go.Scatter(
                 x=right_chosen_data["iteration"],
                 y=right_chosen_data[y_axis],
-                mode="markers",
+                mode="lines",
                 name=f"{y_axis}, optimal step",
             ),
             1,
