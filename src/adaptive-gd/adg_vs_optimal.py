@@ -76,6 +76,7 @@ def _(NDArray, Path, gen_eigenvalues, jnp, np, rng):
             self,
             dim: int = 3,
             null_space_dim: int = 0,
+            index: int = 0,
             dist_method=rng.uniform,
             **kwargs,
         ) -> None:
@@ -92,6 +93,7 @@ def _(NDArray, Path, gen_eigenvalues, jnp, np, rng):
             jordan_form = np.diag(self.eigen_vals)
 
             self.A = jordan_form
+            self.index = index
 
             self.min_value = 0
 
@@ -105,7 +107,7 @@ def _(NDArray, Path, gen_eigenvalues, jnp, np, rng):
             return 0.5 * x.T @ self.A @ x
 
         def save(self, save_path: Path) -> None:
-            save_dir = save_path / f"form_{self.dim}_{self.null_space_dim}"
+            save_dir = save_path / f"form_{self.dim}_{self.null_space_dim}_idx{self.index}"
             save_dir.mkdir(exist_ok=True, parents=True)
             jnp.save(save_dir / "quadratic_form.npy", self.eigen_vals)
     return (QuadraticForm,)
@@ -122,8 +124,13 @@ def _(mo):
     gd_num_iterations = mo.ui.number(start=100, stop=3000, step=1, value=500)
     exp_name = mo.ui.text()
     dim_step = mo.ui.number(value=5)
+
+    convergence_threshold = mo.ui.number(value=1e-4, label="Convergence threshold")
+    forms_per_size = mo.ui.number(value=5, label="Number of forms per size")
     return (
+        convergence_threshold,
         dim_step,
+        forms_per_size,
         gd_num_iterations,
         initial_point_samples_num,
         lower_dim,
@@ -141,6 +148,7 @@ def _(Path, QuadraticForm, jnp, np, rng):
         dim_step: int,
         initial_point_samples_num: int,
         save_path: Path,
+        forms_per_size: int,
         dist_method=rng.uniform,
         null_space_dims: tuple = (0, 5),
         **kwargs,
@@ -150,22 +158,22 @@ def _(Path, QuadraticForm, jnp, np, rng):
 
         for dim in range(lower_dim, upper_dim + 1, dim_step):
             for null_space_dim in null_space_dims:
-                q_form = QuadraticForm(dim=dim, null_space_dim=null_space_dim, dist_method=dist_method, **kwargs)
-                q_form.save(save_path)
-                q_form.convert_to_jax()
-                q_forms.append(q_form)
-
                 initial_point_samples = [
-                    q_form.A @ jnp.array(np.random.uniform(size=dim)) for _ in range(initial_point_samples_num)
-                ]
+                        jnp.array(np.hstack((np.zeros(null_space_dim), np.random.uniform(size=dim-null_space_dim)))) for _ in range(initial_point_samples_num)
+                    ]
 
                 initial_point_samples_norms = [jnp.linalg.norm(pt) for pt in initial_point_samples]
                 initial_point_samples = [
-                    pt / norm * 1_000.0 if norm > 0 else pt
+                    (pt / norm) * 1_000 if norm > 0 else pt
                     for pt, norm in zip(initial_point_samples, initial_point_samples_norms)
                 ]
+                for form_idx in range(forms_per_size):
+                    q_form = QuadraticForm(dim=dim, null_space_dim=null_space_dim, dist_method=dist_method, index=form_idx,**kwargs)
+                    q_form.save(save_path)
+                    q_form.convert_to_jax()
+                    q_forms.append(q_form)
 
-                initial_point_samples_per_form.append(initial_point_samples)
+                    initial_point_samples_per_form.append(initial_point_samples)
 
         return q_forms, initial_point_samples_per_form
     return (generate_quadratic_forms,)
@@ -179,6 +187,7 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
         save_path: Path,
         quadratic_forms: list[QuadraticForm],
         initial_point_samples_per_form: list[jnp.array],
+        convergence_threshold: float,
         beta: float = 0.5,
         device_num: int = 1,
     ) -> None:
@@ -195,7 +204,6 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
                     "kernel_size": [],
                     "initial_point_index": [],
                     "iteration": [],
-                    "function_value": [],
                     "gradient_norm": [],
                     "learning_rate": [],
                     "max_eigenvalue": [],
@@ -203,6 +211,7 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
                     "left_choice_num": [],
                     "right_choice_num": [],
                     "loss": [],
+                    "index": [],
                 }
 
                 for init_point_idx, x in mo.status.progress_bar(
@@ -251,7 +260,6 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
                             results["min_eigenvalue"].append(f.min_ev)
                             results["initial_point_index"].append(init_point_idx)
                             results["iteration"].append(i)
-                            results["function_value"].append(f.calculate_function(x))
 
                             grad_norm = jnp.linalg.norm(grad_i)
 
@@ -261,7 +269,12 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
                             results["gradient_norm"].append(grad_norm)
                             results["learning_rate"].append(lambda_i)
 
-                            results["loss"].append(f.calculate_function(x) - f.min_value)
+                            function_value = f.calculate_function(x)
+                            results["loss"].append(function_value)
+                            results["index"].append(f.index)
+
+                            if function_value < convergence_threshold:
+                                break
 
                             _spinner.update(
                                 f"max_ev: {f.max_ev}, min_ev: {f.min_ev}, max_ev_inv: {1 / f.max_ev}, lr: {lambda_i}, gradient norm: {grad_norm}"
@@ -269,7 +282,7 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
 
                 results_table = pl.DataFrame(results)
 
-                save_path_exp = save_path / f"form_{f.dim}_{f.null_space_dim}"
+                save_path_exp = save_path / f"form_{f.dim}_{f.null_space_dim}_idx{f.index}"
 
                 results_table.write_parquet(save_path_exp / f"{experiment_name}.parquet")
     return (run_experiment_adg,)
@@ -280,6 +293,7 @@ def _(Path, QuadraticForm, jax, jnp, mo, pl):
     def run_experiment_optimal_step(
         gd_num_iterations: int,
         experiment_name: str,
+        convergence_threshold: float,
         save_path: Path,
         quadratic_forms: list[QuadraticForm],
         initial_point_samples_per_form: list[jnp.array],
@@ -298,12 +312,12 @@ def _(Path, QuadraticForm, jax, jnp, mo, pl):
                     "kernel_size": [],
                     "initial_point_index": [],
                     "iteration": [],
-                    "function_value": [],
                     "gradient_norm": [],
                     "learning_rate": [],
                     "max_eigenvalue": [],
                     "min_eigenvalue": [],
                     "loss": [],
+                    "index": [],
                 }
 
                 for init_point_idx, x in mo.status.progress_bar(
@@ -328,22 +342,26 @@ def _(Path, QuadraticForm, jax, jnp, mo, pl):
                             results["min_eigenvalue"].append(f.min_ev)
                             results["initial_point_index"].append(init_point_idx)
                             results["iteration"].append(i)
-                            results["function_value"].append(f.calculate_function(x))
 
                             grad_norm = jnp.linalg.norm(grad_i)
 
                             results["gradient_norm"].append(grad_norm)
                             results["learning_rate"].append(lr)
 
-                            results["loss"].append(f.calculate_function(x) - f.min_value)
+                            function_value = f.calculate_function(x)
+                            results["loss"].append(function_value)
+                            results["index"].append(f.index)
 
                             _spinner.update(
                                 f"max_ev: {f.max_ev}, min_ev: {f.min_ev}, max_ev_inv: {1 / f.max_ev}, lr: {lr}, gradient norm: {grad_norm}"
                             )
 
+                            if function_value < convergence_threshold:
+                                break
+
                 results_table = pl.DataFrame(results)
 
-                save_path_exp = save_path / f"form_{f.dim}_{f.null_space_dim}"
+                save_path_exp = save_path / f"form_{f.dim}_{f.null_space_dim}_idx{f.index}"
 
                 results_table.write_parquet(save_path_exp / f"{experiment_name}.parquet")
     return (run_experiment_optimal_step,)
@@ -351,7 +369,9 @@ def _(Path, QuadraticForm, jax, jnp, mo, pl):
 
 @app.cell
 def _(
+    convergence_threshold,
     dim_step,
+    forms_per_size,
     gd_num_iterations,
     initial_point_samples_num,
     lower_dim,
@@ -368,6 +388,8 @@ def _(
             mo.hstack([mo.md("Maximum dimension of quadratic form"), upper_dim]),
             mo.hstack([mo.md("Initial point samples per quadratic form"), initial_point_samples_num]),
             mo.hstack([mo.md("G.D. number of iterations"), gd_num_iterations]),
+            mo.md(f"{forms_per_size}"),
+            mo.md(f"{convergence_threshold}"),
             mo.md(f"Dimension step: {dim_step}"),
         ]
     )
@@ -396,11 +418,14 @@ def _(
 ):
     def run_experiment_adg_vs_optimal(
         exp_name: Path,
+        forms_per_size: int,
+        convergence_threshold: float,
         dist_method=rng.uniform,
         null_space_dims: tuple = (0, 5),
         device_num: int = 0,
         **kwargs,
     ):
+
         quadratic_forms, initial_points = generate_quadratic_forms(
             lower_dim=lower_dim.value,
             upper_dim=upper_dim.value,
@@ -409,6 +434,7 @@ def _(
             save_path=general_experiment_path / exp_name,
             dist_method=dist_method,
             null_space_dims=null_space_dims,
+            forms_per_size=forms_per_size,
             **kwargs,
         )
 
@@ -419,6 +445,7 @@ def _(
             quadratic_forms=quadratic_forms,
             initial_point_samples_per_form=initial_points,
             beta=0.75,
+            convergence_threshold=convergence_threshold,
             device_num=device_num,
         )
 
@@ -428,6 +455,7 @@ def _(
             save_path=general_experiment_path / exp_name,
             quadratic_forms=quadratic_forms,
             initial_point_samples_per_form=initial_points,
+            convergence_threshold=convergence_threshold,
             device_num=device_num,
         )
     return (run_experiment_adg_vs_optimal,)
@@ -442,12 +470,21 @@ def _(mo):
 
 
 @app.cell
-def _(max_ev, min_ev, rng, run_experiment_adg_vs_optimal):
+def _(
+    convergence_threshold,
+    forms_per_size,
+    max_ev,
+    min_ev,
+    rng,
+    run_experiment_adg_vs_optimal,
+):
     run_experiment_adg_vs_optimal(
         exp_name="uniform",  # CHANGE THIS
         dist_method=rng.uniform,
         null_space_dims=(0, 5, 10, 15),
         device_num=0,
+        convergence_threshold=convergence_threshold.value,
+        forms_per_size=forms_per_size.value,
         # KWARGS
         low=min_ev.value,
         high=max_ev.value,
@@ -646,9 +683,8 @@ def _(Path, general_experiment_path):
 @app.cell
 def _(experiments_data_dirs, mo):
     distribution_experiment = mo.ui.dropdown(options=experiments_data_dirs, label="Distribution experiment")
-    convergence_threshold = mo.ui.number(value=1e-4, label="Convergence threshold")
-    mo.md(f"{distribution_experiment} {convergence_threshold}")
-    return convergence_threshold, distribution_experiment
+    mo.md(f"{distribution_experiment}")
+    return (distribution_experiment,)
 
 
 @app.cell
