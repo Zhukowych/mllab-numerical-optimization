@@ -64,7 +64,7 @@ def _(NDArray, NDarray, np, ortho_group, rng):
         return np.hstack((np.zeros(null_space_dim), non_zero_evs))
 
 
-    def gen_eigenvectors(dim: int = 3) -> NDarray[np.float64]:
+    def gen_eigenvectors(dim: int = 3) -> NDArray[np.float64]:
         return ortho_group.rvs(dim=dim, random_state=rng)
     return (gen_eigenvalues,)
 
@@ -164,7 +164,7 @@ def _(Path, QuadraticForm, jnp, np, rng):
 
                 initial_point_samples_norms = [jnp.linalg.norm(pt) for pt in initial_point_samples]
                 initial_point_samples = [
-                    (pt / norm) * 1_000 if norm > 0 else pt
+                    (pt / norm) if norm > 0 else pt
                     for pt, norm in zip(initial_point_samples, initial_point_samples_norms)
                 ]
                 for form_idx in range(forms_per_size):
@@ -920,7 +920,7 @@ def _(
 
 @app.cell
 def _(mo):
-    mo.md("""
+    mo.md(r"""
     ### Notes
 
     #### Experiment setup
