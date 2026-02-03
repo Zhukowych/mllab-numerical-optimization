@@ -159,16 +159,18 @@ def _(Path, QuadraticForm, jnp, np, rng):
         for dim in range(lower_dim, upper_dim + 1, dim_step):
             for null_space_dim in null_space_dims:
                 initial_point_samples = [
-                        jnp.array(np.hstack((np.zeros(null_space_dim), np.random.uniform(size=dim-null_space_dim)))) for _ in range(initial_point_samples_num)
-                    ]
+                    jnp.array(np.hstack((np.zeros(null_space_dim), np.random.uniform(size=dim - null_space_dim))))
+                    for _ in range(initial_point_samples_num)
+                ]
 
                 initial_point_samples_norms = [jnp.linalg.norm(pt) for pt in initial_point_samples]
                 initial_point_samples = [
-                    (pt / norm) if norm > 0 else pt
-                    for pt, norm in zip(initial_point_samples, initial_point_samples_norms)
+                    (pt / norm) if norm > 0 else pt for pt, norm in zip(initial_point_samples, initial_point_samples_norms)
                 ]
                 for form_idx in range(forms_per_size):
-                    q_form = QuadraticForm(dim=dim, null_space_dim=null_space_dim, dist_method=dist_method, index=form_idx,**kwargs)
+                    q_form = QuadraticForm(
+                        dim=dim, null_space_dim=null_space_dim, dist_method=dist_method, index=form_idx, **kwargs
+                    )
                     q_form.save(save_path)
                     q_form.convert_to_jax()
                     q_forms.append(q_form)
@@ -426,7 +428,6 @@ def _(
         device_num: int = 0,
         **kwargs,
     ):
-
         quadratic_forms, initial_points = generate_quadratic_forms(
             lower_dim=lower_dim.value,
             upper_dim=upper_dim.value,
@@ -524,7 +525,7 @@ def _(
     run_experiment_adg_vs_optimal(
         exp_name="beta_2_100_scaled_forced",  # CHANGE THIS
         dist_method=scaling_and_forcing,
-        null_space_dims=(0,30,70),
+        null_space_dims=(0, 30, 70),
         device_num=0,
         convergence_threshold=convergence_threshold.value,
         forms_per_size=forms_per_size.value,
@@ -561,7 +562,7 @@ def _(
     run_experiment_adg_vs_optimal(
         exp_name="duplicated_evs",  # CHANGE THIS
         dist_method=generate_duplicates,
-        null_space_dims=(0,30,70),
+        null_space_dims=(0, 30, 70),
         device_num=0,
         convergence_threshold=convergence_threshold.value,
         forms_per_size=forms_per_size.value,
@@ -596,7 +597,7 @@ def _(
     run_experiment_adg_vs_optimal(
         exp_name="only_one_max_ev",  # CHANGE THIS
         dist_method=generate_only_one_max_ev,
-        null_space_dims=(0,30,70),
+        null_space_dims=(0, 30, 70),
         device_num=0,
         convergence_threshold=convergence_threshold.value,
         forms_per_size=forms_per_size.value,
@@ -631,7 +632,7 @@ def _(
     run_experiment_adg_vs_optimal(
         exp_name="only_one_min_ev",  # CHANGE THIS
         dist_method=generate_only_one_min_ev,
-        null_space_dims=(0,30,70),
+        null_space_dims=(0, 30, 70),
         device_num=0,
         convergence_threshold=convergence_threshold.value,
         forms_per_size=forms_per_size.value,
@@ -666,7 +667,7 @@ def _(
     run_experiment_adg_vs_optimal(
         exp_name="two_big_evs",  # CHANGE THIS
         dist_method=generate_two_big_evs,
-        null_space_dims=(0,30,70),
+        null_space_dims=(0, 30, 70),
         device_num=0,
         convergence_threshold=convergence_threshold.value,
         forms_per_size=forms_per_size.value,
@@ -697,7 +698,7 @@ def _(
     run_experiment_adg_vs_optimal(
         exp_name="beta_100_2_scaled_forced",  # CHANGE THIS
         dist_method=scaling_and_forcing,
-        null_space_dims=(0,30,70),
+        null_space_dims=(0, 30, 70),
         device_num=0,
         convergence_threshold=convergence_threshold.value,
         forms_per_size=forms_per_size.value,
@@ -724,8 +725,8 @@ def _(pl):
         return data.with_columns(
             pl.lit(1).truediv(pl.col("max_eigenvalue")).alias("max_ev_inv"),
             pl.lit(1).truediv(pl.col("min_eigenvalue")).alias("min_ev_inv"),
-            pl.col("loss").log().diff().name.suffix("_rate_of_change")
-        )
+            pl.col("loss").log().name.suffix("_log_scale"),
+        ).with_columns(pl.col("loss_log_scale").diff().alias("loss_rate_of_change"))
     return (preprocess_data,)
 
 
@@ -751,35 +752,26 @@ def _(distribution_experiment, pl, preprocess_data):
 
 
 @app.cell
-def _(adg_data):
-    adg_data
-    return
-
-
-@app.cell
 def _(adg_data, optimal_step_data, pl):
-    adg_with_optimal = (
-        adg_data.join(
-            optimal_step_data.select(
-                "dimension",
-                "kernel_size",
-                "initial_point_index",
-                "iteration",
-                "index",
-                pl.col("loss").name.suffix("_optimal"),
-                pl.col("learning_rate").name.suffix("_optimal"),
-                pl.col("loss_rate_of_change").name.suffix("_optimal"),
-            ),
-            on=("dimension", "kernel_size", "initial_point_index", "iteration", "index"),
-            how="left",
-        )
-        .with_columns(
-            pl.when(pl.col("learning_rate_optimal").is_not_null())
-            .then(pl.col("learning_rate") / pl.col("learning_rate_optimal"))
-            .otherwise(None)
-            .alias("step_ratio"),
-            pl.col("loss").truediv(pl.col("loss_optimal")).alias("agd/opt"),
-        )
+    adg_with_optimal = adg_data.join(
+        optimal_step_data.select(
+            "dimension",
+            "kernel_size",
+            "initial_point_index",
+            "iteration",
+            "index",
+            pl.col("loss").name.suffix("_optimal"),
+            pl.col("learning_rate").name.suffix("_optimal"),
+            pl.col("loss_rate_of_change").name.suffix("_optimal"),
+        ),
+        on=("dimension", "kernel_size", "initial_point_index", "iteration", "index"),
+        how="left",
+    ).with_columns(
+        pl.when(pl.col("learning_rate_optimal").is_not_null())
+        .then(pl.col("learning_rate") / pl.col("learning_rate_optimal"))
+        .otherwise(None)
+        .alias("step_ratio"),
+        pl.col("loss").truediv(pl.col("loss_optimal")).alias("agd/opt"),
     )
     return (adg_with_optimal,)
 
@@ -832,7 +824,7 @@ def _(adg_data, optimal_step_data, pl, wilcoxon):
                 "index",
                 pl.col("loss").name.suffix("_optimal"),
                 pl.col("learning_rate").name.suffix("_optimal"),
-                pl.col("loss_rate_of_change").name.suffix("_optimal")
+                pl.col("loss_rate_of_change").name.suffix("_optimal"),
             ),
             on=("dimension", "kernel_size", "initial_point_index", "iteration", "index"),
             how="left",
@@ -854,23 +846,27 @@ def _(adg_data, optimal_step_data, pl, wilcoxon):
             )
         )
         .group_by("dimension", "kernel_size", "initial_point_index", "index")
-        .agg("iteration", "loss", "loss_optimal", "learning_rate", "learning_rate_optimal", pl.col("loss_rate_of_change").mean(), pl.col("loss_rate_of_change_optimal").mean())
+        .agg(
+            "iteration",
+            "loss",
+            "loss_optimal",
+            "learning_rate",
+            "learning_rate_optimal",
+            pl.col("loss_rate_of_change").mean(),
+            pl.col("loss_rate_of_change_optimal").mean(),
+        )
     )
 
-    wilxocon_test = (
-        hypotheses_test.with_columns(
-            pl.struct(["loss", "loss_optimal"])
-            .map_elements(
-                lambda x: wilcoxon(x["loss"], x["loss_optimal"], alternative="less").pvalue, return_dtype=pl.Float64
-            )
-            .alias("loss_p_value"),
-            pl.struct(["learning_rate", "learning_rate_optimal"])
-            .map_elements(
-                lambda x: wilcoxon(x["learning_rate"], x["learning_rate_optimal"], alternative="greater").pvalue,
-                return_dtype=pl.Float64,
-            )
-            .alias("lr_p_value"),
+    wilxocon_test = hypotheses_test.with_columns(
+        pl.struct(["loss", "loss_optimal"])
+        .map_elements(lambda x: wilcoxon(x["loss"], x["loss_optimal"], alternative="less").pvalue, return_dtype=pl.Float64)
+        .alias("loss_p_value"),
+        pl.struct(["learning_rate", "learning_rate_optimal"])
+        .map_elements(
+            lambda x: wilcoxon(x["learning_rate"], x["learning_rate_optimal"], alternative="greater").pvalue,
+            return_dtype=pl.Float64,
         )
+        .alias("lr_p_value"),
     )
     return hypotheses_test, wilxocon_test
 
@@ -893,7 +889,14 @@ def _(mo, pl, wilxocon_test):
 
 @app.cell
 def _(hypotheses_test: "pl.DataFrame", mo, pl):
-    convergence_rate = hypotheses_test.select("dimension", "kernel_size", "initial_point_index", "index", pl.col("loss_rate_of_change"), pl.col("loss_rate_of_change_optimal"))
+    convergence_rate = hypotheses_test.select(
+        "dimension",
+        "kernel_size",
+        "initial_point_index",
+        "index",
+        pl.col("loss_rate_of_change"),
+        pl.col("loss_rate_of_change_optimal"),
+    )
     mo.ui.dataframe(convergence_rate)
     return
 
@@ -1005,7 +1008,10 @@ def _(
     fig.update_layout()
 
     eigen_vals = (
-        jnp.load(distribution_experiment.value / f"form_{dim_to_plot.value}_{ker_to_plot.value}_idx{form_idx.value}/quadratic_form.npy")
+        jnp.load(
+            distribution_experiment.value
+            / f"form_{dim_to_plot.value}_{ker_to_plot.value}_idx{form_idx.value}/quadratic_form.npy"
+        )
         if (dim_to_plot.value is not None and ker_to_plot.value is not None)
         else [0]
     )
@@ -1026,11 +1032,7 @@ def _(
         1,
     )
     step_ratio_figure.add_trace(
-        go.Scatter(
-            y=chosen_joined_data["agd/opt"],
-            x=chosen_joined_data["iteration"],
-            mode="lines"
-        ),row=2,col=1
+        go.Scatter(y=chosen_joined_data["agd/opt"], x=chosen_joined_data["iteration"], mode="lines"), row=2, col=1
     )
 
 
@@ -1069,12 +1071,12 @@ def _(mo):
     #### Experiment notes
     - uniform distribution $[\lambda_{\min}, \lambda_{\max}]$, converges faster and has bigger step
     - Beta($lpha=2$, $eta=100$) AGD converges faster than optimal step, step is bigger
-    - Beta($lpha=100$, $eta=24$) AGD converges slower, and learning rate is smaller too
+    - Beta($lpha=100$, $eta=2$) AGD converges slower, and learning rate is smaller too
 
     I tried to create more *extreme* spectral gap:
-    - All the eigenvalue are the $\lambda_{\min}$ and one is $\lambda_{\max}$. ADG converged slower. What is interesting that there are $pprox$ 200 functions that have this reversed. What is more interesting, that those are 200 functions that haven't converged.
+    - All the eigenvalue are the $\lambda_{\min}$ and one is $\lambda_{\max}$. ADG converged faster.
     - All the eigenvalue are the $\lambda_{\max}$ and one is $\lambda_{\min}$. ADG converged slower add had smaller step.
-    - All the eigenvalue are the $\lambda_{\min}$ and two are $\lambda_{\max}$ and $\lambda_{\max}-1$. ADG converged slower. What is interesting that there are $pprox$ 50 functions that have this reversed. What is more interesting, that those are 50 functions that haven't converged.
+    - All the eigenvalue are the $\lambda_{\min}$ and two are $\lambda_{\max}$ and $\lambda_{\max}-1$. ADG converged faster.
     """)
     return
 
