@@ -58,7 +58,7 @@ def _(mo):
 
 
 @app.cell
-def _(NDArray, NDarray, np, ortho_group, rng):
+def _(NDArray, np, ortho_group, rng):
     def gen_eigenvalues(dim: int = 3, null_space_dim: int = 0, dist_method=rng.uniform, **kwargs) -> NDArray[np.float64]:
         non_zero_evs = dist_method(size=dim - null_space_dim, **kwargs)
         return np.hstack((np.zeros(null_space_dim), non_zero_evs))
@@ -249,8 +249,9 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
 
                             x_prev = x
                             grad_prev = grad_i
-                            lambda_prev = lambda_i
+                        
                             theta_i = lambda_i / lambda_prev
+                            lambda_prev = lambda_i
 
                             x -= lambda_i * grad_i
 
