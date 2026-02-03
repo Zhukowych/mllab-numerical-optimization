@@ -481,7 +481,7 @@ def _(
     run_experiment_adg_vs_optimal(
         exp_name="uniform",  # CHANGE THIS
         dist_method=rng.uniform,
-        null_space_dims=(0, 5, 10, 15),
+        null_space_dims=(0, 30, 70),
         device_num=0,
         convergence_threshold=convergence_threshold.value,
         forms_per_size=forms_per_size.value,
@@ -501,7 +501,15 @@ def _(mo):
 
 
 @app.cell
-def _(jnp, max_ev, min_ev, rng, run_experiment_adg_vs_optimal):
+def _(
+    convergence_threshold,
+    forms_per_size,
+    jnp,
+    max_ev,
+    min_ev,
+    rng,
+    run_experiment_adg_vs_optimal,
+):
     def scaling_and_forcing(a: float, b: float, size: int, max_ev: float, min_ev: float) -> jnp.array:
         initial_eigen_vals = jnp.sort(rng.beta(a=a, b=b, size=size))
 
@@ -515,8 +523,10 @@ def _(jnp, max_ev, min_ev, rng, run_experiment_adg_vs_optimal):
     run_experiment_adg_vs_optimal(
         exp_name="beta_2_100_scaled_forced",  # CHANGE THIS
         dist_method=scaling_and_forcing,
-        null_space_dims=(0, 5, 10, 15),
+        null_space_dims=(0,30,70),
         device_num=0,
+        convergence_threshold=convergence_threshold.value,
+        forms_per_size=forms_per_size.value,
         # KWARGS
         a=2,
         b=100,
@@ -535,7 +545,14 @@ def _(mo):
 
 
 @app.cell
-def _(jnp, max_ev, min_ev, run_experiment_adg_vs_optimal):
+def _(
+    convergence_threshold,
+    forms_per_size,
+    jnp,
+    max_ev,
+    min_ev,
+    run_experiment_adg_vs_optimal,
+):
     def generate_duplicates(size: int, max_ev: float, min_ev: float) -> jnp.array:
         return jnp.ones(size) * max_ev / 2
 
@@ -543,8 +560,10 @@ def _(jnp, max_ev, min_ev, run_experiment_adg_vs_optimal):
     run_experiment_adg_vs_optimal(
         exp_name="duplicated_evs",  # CHANGE THIS
         dist_method=generate_duplicates,
-        null_space_dims=(0, 5, 10, 15),
+        null_space_dims=(0,30,70),
         device_num=0,
+        convergence_threshold=convergence_threshold.value,
+        forms_per_size=forms_per_size.value,
         # KWARGS
         max_ev=max_ev.value,
         min_ev=min_ev.value,
@@ -561,7 +580,14 @@ def _(mo):
 
 
 @app.cell
-def _(jnp, max_ev, min_ev, run_experiment_adg_vs_optimal):
+def _(
+    convergence_threshold,
+    forms_per_size,
+    jnp,
+    max_ev,
+    min_ev,
+    run_experiment_adg_vs_optimal,
+):
     def generate_only_one_max_ev(size: int, max_ev: float, min_ev: float) -> jnp.array:
         return jnp.array([min_ev for _ in range(size - 1)] + [max_ev])
 
@@ -569,8 +595,10 @@ def _(jnp, max_ev, min_ev, run_experiment_adg_vs_optimal):
     run_experiment_adg_vs_optimal(
         exp_name="only_one_max_ev",  # CHANGE THIS
         dist_method=generate_only_one_max_ev,
-        null_space_dims=(0, 5, 10, 15),
+        null_space_dims=(0,30,70),
         device_num=0,
+        convergence_threshold=convergence_threshold.value,
+        forms_per_size=forms_per_size.value,
         # KWARGS
         max_ev=max_ev.value,
         min_ev=min_ev.value,
@@ -587,7 +615,14 @@ def _(mo):
 
 
 @app.cell
-def _(jnp, max_ev, min_ev, run_experiment_adg_vs_optimal):
+def _(
+    convergence_threshold,
+    forms_per_size,
+    jnp,
+    max_ev,
+    min_ev,
+    run_experiment_adg_vs_optimal,
+):
     def generate_only_one_min_ev(size: int, max_ev: float, min_ev: float) -> jnp.array:
         return jnp.array([max_ev for _ in range(size - 1)] + [min_ev])
 
@@ -595,8 +630,10 @@ def _(jnp, max_ev, min_ev, run_experiment_adg_vs_optimal):
     run_experiment_adg_vs_optimal(
         exp_name="only_one_min_ev",  # CHANGE THIS
         dist_method=generate_only_one_min_ev,
-        null_space_dims=(0, 5, 10, 15),
+        null_space_dims=(0,30,70),
         device_num=0,
+        convergence_threshold=convergence_threshold.value,
+        forms_per_size=forms_per_size.value,
         # KWARGS
         max_ev=max_ev.value,
         min_ev=min_ev.value,
@@ -613,7 +650,14 @@ def _(mo):
 
 
 @app.cell
-def _(jnp, max_ev, min_ev, run_experiment_adg_vs_optimal):
+def _(
+    convergence_threshold,
+    forms_per_size,
+    jnp,
+    max_ev,
+    min_ev,
+    run_experiment_adg_vs_optimal,
+):
     def generate_two_big_evs(size: int, max_ev: float, min_ev: float) -> jnp.array:
         return jnp.array([min_ev for _ in range(size - 2)] + [max_ev - 1, max_ev])
 
@@ -621,8 +665,10 @@ def _(jnp, max_ev, min_ev, run_experiment_adg_vs_optimal):
     run_experiment_adg_vs_optimal(
         exp_name="two_big_evs",  # CHANGE THIS
         dist_method=generate_two_big_evs,
-        null_space_dims=(0, 5, 10, 15),
+        null_space_dims=(0,30,70),
         device_num=0,
+        convergence_threshold=convergence_threshold.value,
+        forms_per_size=forms_per_size.value,
         # KWARGS
         max_ev=max_ev.value,
         min_ev=min_ev.value,
@@ -639,12 +685,21 @@ def _(mo):
 
 
 @app.cell
-def _(max_ev, min_ev, run_experiment_adg_vs_optimal, scaling_and_forcing):
+def _(
+    convergence_threshold,
+    forms_per_size,
+    max_ev,
+    min_ev,
+    run_experiment_adg_vs_optimal,
+    scaling_and_forcing,
+):
     run_experiment_adg_vs_optimal(
         exp_name="beta_100_2_scaled_forced",  # CHANGE THIS
         dist_method=scaling_and_forcing,
-        null_space_dims=(0, 5, 10, 15),
+        null_space_dims=(0,30,70),
         device_num=0,
+        convergence_threshold=convergence_threshold.value,
+        forms_per_size=forms_per_size.value,
         # KWARGS
         a=100,
         b=2,
@@ -731,7 +786,7 @@ def _(mo):
 
 
 @app.cell
-def _(adg_data, convergence_threshold, optimal_step_data, pl, wilcoxon):
+def _(adg_data, optimal_step_data, pl, wilcoxon):
     hypotheses_test: pl.DataFrame = (
         adg_data.join(
             optimal_step_data.select(
@@ -739,16 +794,16 @@ def _(adg_data, convergence_threshold, optimal_step_data, pl, wilcoxon):
                 "kernel_size",
                 "initial_point_index",
                 "iteration",
+                "index",
                 pl.col("loss").name.suffix("_optimal"),
                 pl.col("learning_rate").name.suffix("_optimal"),
                 pl.col("loss_rate_of_change").name.suffix("_optimal")
             ),
-            on=("dimension", "kernel_size", "initial_point_index", "iteration"),
+            on=("dimension", "kernel_size", "initial_point_index", "iteration", "index"),
             how="left",
         )
         .filter(
-            (pl.col("loss").ge(convergence_threshold.value) | pl.col("loss_optimal").ge(convergence_threshold.value))
-            & (
+            (
                 pl.col("loss").lt(
                     pl.col("loss")
                     .quantile(0.98, interpolation="linear")
@@ -763,9 +818,12 @@ def _(adg_data, convergence_threshold, optimal_step_data, pl, wilcoxon):
                 )
             )
         )
-        .group_by("dimension", "kernel_size", "initial_point_index")
-        .agg("iteration", "loss", "loss_optimal", "learning_rate", "learning_rate_optimal", "loss_rate_of_change", "loss_rate_of_change_optimal")
-        .with_columns(
+        .group_by("dimension", "kernel_size", "initial_point_index", "index")
+        .agg("iteration", "loss", "loss_optimal", "learning_rate", "learning_rate_optimal", pl.col("loss_rate_of_change").mean(), pl.col("loss_rate_of_change_optimal").mean())
+    )
+
+    wilxocon_test = (
+        hypotheses_test.with_columns(
             pl.struct(["loss", "loss_optimal"])
             .map_elements(
                 lambda x: wilcoxon(x["loss"], x["loss_optimal"], alternative="less").pvalue, return_dtype=pl.Float64
@@ -779,22 +837,29 @@ def _(adg_data, convergence_threshold, optimal_step_data, pl, wilcoxon):
             .alias("lr_p_value"),
         )
     )
-    return (hypotheses_test,)
+    return hypotheses_test, wilxocon_test
 
 
 @app.cell
-def _(hypotheses_test: "pl.DataFrame", mo, pl):
+def _(mo, pl, wilxocon_test):
     mo.md(f"""
-    #Hypothesis of adg converging faster {mo.ui.dataframe(hypotheses_test.filter(pl.col("loss_p_value").gt(0.05)))}
+    #Hypothesis of adg converging faster {mo.ui.dataframe(wilxocon_test.filter(pl.col("loss_p_value").gt(0.05)))}
+    """)
+    return
+
+
+@app.cell
+def _(mo, pl, wilxocon_test):
+    mo.md(f"""
+    #Hypothesis of adg having bigger step {mo.ui.dataframe(wilxocon_test.filter(pl.col("lr_p_value").gt(0.05)))}
     """)
     return
 
 
 @app.cell
 def _(hypotheses_test: "pl.DataFrame", mo, pl):
-    mo.md(f"""
-    #Hypothesis of adg having bigger step {mo.ui.dataframe(hypotheses_test.filter(pl.col("lr_p_value").gt(0.05)))}
-    """)
+    convergence_rate = hypotheses_test.select("dimension", "kernel_size", "initial_point_index", "index", pl.col("loss_rate_of_change"), pl.col("loss_rate_of_change_optimal"))
+    mo.ui.dataframe(convergence_rate)
     return
 
 
@@ -811,14 +876,23 @@ def _(adg_data, mo, optimal_step_data):
     dim_to_plot = mo.ui.dropdown(options=adg_data["dimension"].unique())
     ker_to_plot = mo.ui.dropdown(options=adg_data["kernel_size"].unique())
     init_point_to_plot = mo.ui.dropdown(options=adg_data["initial_point_index"].unique())
+    form_idx = mo.ui.dropdown(options=adg_data["index"].unique())
     what_to_plot = mo.ui.multiselect(options=set(adg_data.columns) & set(optimal_step_data.columns))
-    return dim_to_plot, init_point_to_plot, ker_to_plot, what_to_plot
+    return dim_to_plot, form_idx, init_point_to_plot, ker_to_plot, what_to_plot
 
 
 @app.cell
-def _(dim_to_plot, init_point_to_plot, ker_to_plot, mo, what_to_plot):
+def _(
+    dim_to_plot,
+    form_idx,
+    init_point_to_plot,
+    ker_to_plot,
+    mo,
+    what_to_plot,
+):
     plot_constructor = mo.vstack(
         [
+            mo.hstack([mo.md("Quadratic form index"), form_idx]),
             mo.hstack([mo.md("Dim of function"), dim_to_plot]),
             mo.hstack([mo.md("Kernel size of function"), ker_to_plot]),
             mo.hstack([mo.md("Initial point index"), init_point_to_plot]),
@@ -833,6 +907,7 @@ def _(
     adg_data,
     dim_to_plot,
     distribution_experiment,
+    form_idx,
     go,
     init_point_to_plot,
     jnp,
@@ -848,11 +923,13 @@ def _(
         pl.col("dimension").eq(dim_to_plot.value)
         & pl.col("kernel_size").eq(ker_to_plot.value)
         & pl.col("initial_point_index").eq(init_point_to_plot.value)
+        & pl.col("index").eq(form_idx.value)
     )
     right_chosen_data = optimal_step_data.filter(
         pl.col("dimension").eq(dim_to_plot.value)
         & pl.col("kernel_size").eq(ker_to_plot.value)
         & pl.col("initial_point_index").eq(init_point_to_plot.value)
+        & pl.col("index").eq(form_idx.value)
     )
 
 
@@ -886,7 +963,7 @@ def _(
     fig.update_layout()
 
     eigen_vals = (
-        jnp.load(distribution_experiment.value / f"form_{dim_to_plot.value}_{ker_to_plot.value}/quadratic_form.npy")
+        jnp.load(distribution_experiment.value / f"form_{dim_to_plot.value}_{ker_to_plot.value}_idx{form_idx.value}/quadratic_form.npy")
         if (dim_to_plot.value is not None and ker_to_plot.value is not None)
         else [0]
     )
