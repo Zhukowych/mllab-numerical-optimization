@@ -746,6 +746,9 @@ def _(adg_data, convergence_threshold, optimal_step_data, pl, wilcoxon):
             on=("dimension", "kernel_size", "initial_point_index", "iteration"),
             how="left",
         )
+        .with_columns(
+            (pl.col("learning_rate") / pl.col("learning_rate_optimal")).alias("step_ratio")
+        )
         .filter(
             (pl.col("loss").ge(convergence_threshold.value) | pl.col("loss_optimal").ge(convergence_threshold.value))
             & (
@@ -764,7 +767,7 @@ def _(adg_data, convergence_threshold, optimal_step_data, pl, wilcoxon):
             )
         )
         .group_by("dimension", "kernel_size", "initial_point_index")
-        .agg("iteration", "loss", "loss_optimal", "learning_rate", "learning_rate_optimal", "loss_rate_of_change", "loss_rate_of_change_optimal")
+        .agg("iteration", "loss", "loss_optimal", "learning_rate", "learning_rate_optimal", "step_ratio", "loss_rate_of_change", "loss_rate_of_change_optimal")
         .with_columns(
             pl.struct(["loss", "loss_optimal"])
             .map_elements(
