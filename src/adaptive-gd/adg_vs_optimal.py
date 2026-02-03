@@ -18,6 +18,7 @@ def _():
     from numpy.typing import NDArray
 
     import polars as pl
+    import polars.selectors as cs
     import plotly.express as px
     from plotly.subplots import make_subplots
     import plotly.graph_objects as go
@@ -63,7 +64,7 @@ def _(NDArray, NDarray, np, ortho_group, rng):
         return np.hstack((np.zeros(null_space_dim), non_zero_evs))
 
 
-    def gen_eigenvectors(dim: int = 3) -> NDarray[np.float64]:
+    def gen_eigenvectors(dim: int = 3) -> NDArray[np.float64]:
         return ortho_group.rvs(dim=dim, random_state=rng)
     return (gen_eigenvalues,)
 
@@ -75,6 +76,7 @@ def _(NDArray, Path, gen_eigenvalues, jnp, np, rng):
             self,
             dim: int = 3,
             null_space_dim: int = 0,
+            index: int = 0,
             dist_method=rng.uniform,
             **kwargs,
         ) -> None:
@@ -91,6 +93,7 @@ def _(NDArray, Path, gen_eigenvalues, jnp, np, rng):
             jordan_form = np.diag(self.eigen_vals)
 
             self.A = jordan_form
+            self.index = index
 
             self.min_value = 0
 
@@ -104,7 +107,7 @@ def _(NDArray, Path, gen_eigenvalues, jnp, np, rng):
             return 0.5 * x.T @ self.A @ x
 
         def save(self, save_path: Path) -> None:
-            save_dir = save_path / f"form_{self.dim}_{self.null_space_dim}"
+            save_dir = save_path / f"form_{self.dim}_{self.null_space_dim}_idx{self.index}"
             save_dir.mkdir(exist_ok=True, parents=True)
             jnp.save(save_dir / "quadratic_form.npy", self.eigen_vals)
     return (QuadraticForm,)
@@ -113,16 +116,21 @@ def _(NDArray, Path, gen_eigenvalues, jnp, np, rng):
 @app.cell
 def _(mo):
     min_ev = mo.ui.number(start=0.01, stop=10000, step=0.1)
-    max_ev = mo.ui.number(start=1, stop=10_000, step=0.1, value=10_000)
+    max_ev = mo.ui.number(start=1, stop=1_000, step=0.1, value=1_000)
 
     lower_dim = mo.ui.number(start=0, stop=5000, step=1, value=30)
     upper_dim = mo.ui.number(start=0, stop=5000, step=1, value=100)
     initial_point_samples_num = mo.ui.number(start=1, stop=100, step=1, value=10)
-    gd_num_iterations = mo.ui.number(start=100, stop=3000, step=1, value=300)
+    gd_num_iterations = mo.ui.number(start=100, stop=3000, step=1, value=500)
     exp_name = mo.ui.text()
     dim_step = mo.ui.number(value=5)
+
+    convergence_threshold = mo.ui.number(value=1e-4, label="Convergence threshold")
+    forms_per_size = mo.ui.number(value=5, label="Number of forms per size")
     return (
+        convergence_threshold,
         dim_step,
+        forms_per_size,
         gd_num_iterations,
         initial_point_samples_num,
         lower_dim,
@@ -140,6 +148,7 @@ def _(Path, QuadraticForm, jnp, np, rng):
         dim_step: int,
         initial_point_samples_num: int,
         save_path: Path,
+        forms_per_size: int,
         dist_method=rng.uniform,
         null_space_dims: tuple = (0, 5),
         **kwargs,
@@ -149,22 +158,22 @@ def _(Path, QuadraticForm, jnp, np, rng):
 
         for dim in range(lower_dim, upper_dim + 1, dim_step):
             for null_space_dim in null_space_dims:
-                q_form = QuadraticForm(dim=dim, null_space_dim=null_space_dim, dist_method=dist_method, **kwargs)
-                q_form.save(save_path)
-                q_form.convert_to_jax()
-                q_forms.append(q_form)
-
                 initial_point_samples = [
-                    q_form.A @ jnp.array(np.random.uniform(size=dim)) for _ in range(initial_point_samples_num)
-                ]
+                        jnp.array(np.hstack((np.zeros(null_space_dim), np.random.uniform(size=dim-null_space_dim)))) for _ in range(initial_point_samples_num)
+                    ]
 
                 initial_point_samples_norms = [jnp.linalg.norm(pt) for pt in initial_point_samples]
                 initial_point_samples = [
-                    pt / norm * 1_000.0 if norm > 0 else pt
+                    (pt / norm) if norm > 0 else pt
                     for pt, norm in zip(initial_point_samples, initial_point_samples_norms)
                 ]
+                for form_idx in range(forms_per_size):
+                    q_form = QuadraticForm(dim=dim, null_space_dim=null_space_dim, dist_method=dist_method, index=form_idx,**kwargs)
+                    q_form.save(save_path)
+                    q_form.convert_to_jax()
+                    q_forms.append(q_form)
 
-                initial_point_samples_per_form.append(initial_point_samples)
+                    initial_point_samples_per_form.append(initial_point_samples)
 
         return q_forms, initial_point_samples_per_form
     return (generate_quadratic_forms,)
@@ -178,6 +187,7 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
         save_path: Path,
         quadratic_forms: list[QuadraticForm],
         initial_point_samples_per_form: list[jnp.array],
+        convergence_threshold: float,
         beta: float = 0.5,
         device_num: int = 1,
     ) -> None:
@@ -194,7 +204,6 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
                     "kernel_size": [],
                     "initial_point_index": [],
                     "iteration": [],
-                    "function_value": [],
                     "gradient_norm": [],
                     "learning_rate": [],
                     "max_eigenvalue": [],
@@ -202,6 +211,7 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
                     "left_choice_num": [],
                     "right_choice_num": [],
                     "loss": [],
+                    "index": [],
                 }
 
                 for init_point_idx, x in mo.status.progress_bar(
@@ -250,7 +260,6 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
                             results["min_eigenvalue"].append(f.min_ev)
                             results["initial_point_index"].append(init_point_idx)
                             results["iteration"].append(i)
-                            results["function_value"].append(f.calculate_function(x))
 
                             grad_norm = jnp.linalg.norm(grad_i)
 
@@ -260,7 +269,12 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
                             results["gradient_norm"].append(grad_norm)
                             results["learning_rate"].append(lambda_i)
 
-                            results["loss"].append(f.calculate_function(x) - f.min_value)
+                            function_value = f.calculate_function(x)
+                            results["loss"].append(function_value)
+                            results["index"].append(f.index)
+
+                            if function_value < convergence_threshold:
+                                break
 
                             _spinner.update(
                                 f"max_ev: {f.max_ev}, min_ev: {f.min_ev}, max_ev_inv: {1 / f.max_ev}, lr: {lambda_i}, gradient norm: {grad_norm}"
@@ -268,7 +282,7 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
 
                 results_table = pl.DataFrame(results)
 
-                save_path_exp = save_path / f"form_{f.dim}_{f.null_space_dim}"
+                save_path_exp = save_path / f"form_{f.dim}_{f.null_space_dim}_idx{f.index}"
 
                 results_table.write_parquet(save_path_exp / f"{experiment_name}.parquet")
     return (run_experiment_adg,)
@@ -279,6 +293,7 @@ def _(Path, QuadraticForm, jax, jnp, mo, pl):
     def run_experiment_optimal_step(
         gd_num_iterations: int,
         experiment_name: str,
+        convergence_threshold: float,
         save_path: Path,
         quadratic_forms: list[QuadraticForm],
         initial_point_samples_per_form: list[jnp.array],
@@ -297,12 +312,12 @@ def _(Path, QuadraticForm, jax, jnp, mo, pl):
                     "kernel_size": [],
                     "initial_point_index": [],
                     "iteration": [],
-                    "function_value": [],
                     "gradient_norm": [],
                     "learning_rate": [],
                     "max_eigenvalue": [],
                     "min_eigenvalue": [],
                     "loss": [],
+                    "index": [],
                 }
 
                 for init_point_idx, x in mo.status.progress_bar(
@@ -311,7 +326,7 @@ def _(Path, QuadraticForm, jax, jnp, mo, pl):
                     show_eta=True,
                     show_rate=True,
                     total=len(initial_point_samples),
-                    remove_on_exit=True
+                    remove_on_exit=True,
                 ):
                     with mo.status.spinner(subtitle="Descending...") as _spinner:
                         lr = 1 / f.max_ev
@@ -327,22 +342,26 @@ def _(Path, QuadraticForm, jax, jnp, mo, pl):
                             results["min_eigenvalue"].append(f.min_ev)
                             results["initial_point_index"].append(init_point_idx)
                             results["iteration"].append(i)
-                            results["function_value"].append(f.calculate_function(x))
 
                             grad_norm = jnp.linalg.norm(grad_i)
 
                             results["gradient_norm"].append(grad_norm)
                             results["learning_rate"].append(lr)
 
-                            results["loss"].append(f.calculate_function(x) - f.min_value)
+                            function_value = f.calculate_function(x)
+                            results["loss"].append(function_value)
+                            results["index"].append(f.index)
 
                             _spinner.update(
                                 f"max_ev: {f.max_ev}, min_ev: {f.min_ev}, max_ev_inv: {1 / f.max_ev}, lr: {lr}, gradient norm: {grad_norm}"
                             )
 
+                            if function_value < convergence_threshold:
+                                break
+
                 results_table = pl.DataFrame(results)
 
-                save_path_exp = save_path / f"form_{f.dim}_{f.null_space_dim}"
+                save_path_exp = save_path / f"form_{f.dim}_{f.null_space_dim}_idx{f.index}"
 
                 results_table.write_parquet(save_path_exp / f"{experiment_name}.parquet")
     return (run_experiment_optimal_step,)
@@ -350,7 +369,9 @@ def _(Path, QuadraticForm, jax, jnp, mo, pl):
 
 @app.cell
 def _(
+    convergence_threshold,
     dim_step,
+    forms_per_size,
     gd_num_iterations,
     initial_point_samples_num,
     lower_dim,
@@ -367,6 +388,8 @@ def _(
             mo.hstack([mo.md("Maximum dimension of quadratic form"), upper_dim]),
             mo.hstack([mo.md("Initial point samples per quadratic form"), initial_point_samples_num]),
             mo.hstack([mo.md("G.D. number of iterations"), gd_num_iterations]),
+            mo.md(f"{forms_per_size}"),
+            mo.md(f"{convergence_threshold}"),
             mo.md(f"Dimension step: {dim_step}"),
         ]
     )
@@ -395,13 +418,14 @@ def _(
 ):
     def run_experiment_adg_vs_optimal(
         exp_name: Path,
+        forms_per_size: int,
+        convergence_threshold: float,
         dist_method=rng.uniform,
         null_space_dims: tuple = (0, 5),
-        device_num: int=0,
-    
+        device_num: int = 0,
         **kwargs,
-    
     ):
+
         quadratic_forms, initial_points = generate_quadratic_forms(
             lower_dim=lower_dim.value,
             upper_dim=upper_dim.value,
@@ -410,6 +434,7 @@ def _(
             save_path=general_experiment_path / exp_name,
             dist_method=dist_method,
             null_space_dims=null_space_dims,
+            forms_per_size=forms_per_size,
             **kwargs,
         )
 
@@ -420,15 +445,17 @@ def _(
             quadratic_forms=quadratic_forms,
             initial_point_samples_per_form=initial_points,
             beta=0.75,
+            convergence_threshold=convergence_threshold,
             device_num=device_num,
         )
-    
+
         run_experiment_optimal_step(
             gd_num_iterations=gd_num_iterations.value,
             experiment_name="gd_optimal_step",
             save_path=general_experiment_path / exp_name,
             quadratic_forms=quadratic_forms,
             initial_point_samples_per_form=initial_points,
+            convergence_threshold=convergence_threshold,
             device_num=device_num,
         )
     return (run_experiment_adg_vs_optimal,)
@@ -443,12 +470,21 @@ def _(mo):
 
 
 @app.cell
-def _(max_ev, min_ev, rng, run_experiment_adg_vs_optimal):
+def _(
+    convergence_threshold,
+    forms_per_size,
+    max_ev,
+    min_ev,
+    rng,
+    run_experiment_adg_vs_optimal,
+):
     run_experiment_adg_vs_optimal(
-        exp_name="uniform", # CHANGE THIS
+        exp_name="uniform",  # CHANGE THIS
         dist_method=rng.uniform,
-        null_space_dims=(0,5,10,15),
+        null_space_dims=(0, 5, 10, 15),
         device_num=0,
+        convergence_threshold=convergence_threshold.value,
+        forms_per_size=forms_per_size.value,
         # KWARGS
         low=min_ev.value,
         high=max_ev.value,
@@ -456,46 +492,164 @@ def _(max_ev, min_ev, rng, run_experiment_adg_vs_optimal):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(mo):
     mo.md(r"""
-    ### $B(\alpha = 1, \beta = 20)$ distribution
+    ### $B(\alpha=2, \beta=100)$ distrubution scaled to $(\lambda_{\min}, \lambda_{\max})$. $\lambda_{\max}$ is forsed to be in the form.
     """)
     return
 
 
 @app.cell
-def _(rng, run_experiment_adg_vs_optimal):
+def _(jnp, max_ev, min_ev, rng, run_experiment_adg_vs_optimal):
+    def scaling_and_forcing(a: float, b: float, size: int, max_ev: float, min_ev: float) -> jnp.array:
+        initial_eigen_vals = jnp.sort(rng.beta(a=a, b=b, size=size))
+
+        scaled_eigen_vals = min_ev + (max_ev - min_ev) * initial_eigen_vals
+        scaled_eigen_vals = scaled_eigen_vals.at[-1].set(max_ev)
+        scaled_eigen_vals = scaled_eigen_vals.at[0].set(min_ev)
+
+        return scaled_eigen_vals
+
+
     run_experiment_adg_vs_optimal(
-        exp_name="beta_1_20", # CHANGE THIS
-        dist_method=rng.beta,
-        null_space_dims=(0,5,10,15),
-        device_num=0,
-        # KWARGS
-        a=1,
-        b=20,
-    )
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ### $B(\alpha=2, \beta=100)$ distribution
-    """)
-    return
-
-
-@app.cell
-def _(rng, run_experiment_adg_vs_optimal):
-    run_experiment_adg_vs_optimal(
-        exp_name="beta_2_100", # CHANGE THIS
-        dist_method=rng.beta,
-        null_space_dims=(0,5,10,15),
+        exp_name="beta_2_100_scaled_forced",  # CHANGE THIS
+        dist_method=scaling_and_forcing,
+        null_space_dims=(0, 5, 10, 15),
         device_num=0,
         # KWARGS
         a=2,
         b=100,
+        max_ev=max_ev.value,
+        min_ev=min_ev.value,
+    )
+    return (scaling_and_forcing,)
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ### Duplicated eigenvalues
+    """)
+    return
+
+
+@app.cell
+def _(jnp, max_ev, min_ev, run_experiment_adg_vs_optimal):
+    def generate_duplicates(size: int, max_ev: float, min_ev: float) -> jnp.array:
+        return jnp.ones(size) * max_ev / 2
+
+
+    run_experiment_adg_vs_optimal(
+        exp_name="duplicated_evs",  # CHANGE THIS
+        dist_method=generate_duplicates,
+        null_space_dims=(0, 5, 10, 15),
+        device_num=0,
+        # KWARGS
+        max_ev=max_ev.value,
+        min_ev=min_ev.value,
+    )
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ### $\dim - 1$ of space is duplicated minimial eigenvalue, the other ev is max ev
+    """)
+    return
+
+
+@app.cell
+def _(jnp, max_ev, min_ev, run_experiment_adg_vs_optimal):
+    def generate_only_one_max_ev(size: int, max_ev: float, min_ev: float) -> jnp.array:
+        return jnp.array([min_ev for _ in range(size - 1)] + [max_ev])
+
+
+    run_experiment_adg_vs_optimal(
+        exp_name="only_one_max_ev",  # CHANGE THIS
+        dist_method=generate_only_one_max_ev,
+        null_space_dims=(0, 5, 10, 15),
+        device_num=0,
+        # KWARGS
+        max_ev=max_ev.value,
+        min_ev=min_ev.value,
+    )
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ### $\dim - 1$ of space is duplicated maximal eigenvalue, the other ev is min ev
+    """)
+    return
+
+
+@app.cell
+def _(jnp, max_ev, min_ev, run_experiment_adg_vs_optimal):
+    def generate_only_one_min_ev(size: int, max_ev: float, min_ev: float) -> jnp.array:
+        return jnp.array([max_ev for _ in range(size - 1)] + [min_ev])
+
+
+    run_experiment_adg_vs_optimal(
+        exp_name="only_one_min_ev",  # CHANGE THIS
+        dist_method=generate_only_one_min_ev,
+        null_space_dims=(0, 5, 10, 15),
+        device_num=0,
+        # KWARGS
+        max_ev=max_ev.value,
+        min_ev=min_ev.value,
+    )
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ### $\dim - 2$ of space is duplicated minimal eigenvalue, the other ev is max ev and $\lambda_{\max} - 1$
+    """)
+    return
+
+
+@app.cell
+def _(jnp, max_ev, min_ev, run_experiment_adg_vs_optimal):
+    def generate_two_big_evs(size: int, max_ev: float, min_ev: float) -> jnp.array:
+        return jnp.array([min_ev for _ in range(size - 2)] + [max_ev - 1, max_ev])
+
+
+    run_experiment_adg_vs_optimal(
+        exp_name="two_big_evs",  # CHANGE THIS
+        dist_method=generate_two_big_evs,
+        null_space_dims=(0, 5, 10, 15),
+        device_num=0,
+        # KWARGS
+        max_ev=max_ev.value,
+        min_ev=min_ev.value,
+    )
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ### $B(\alpha=100, \beta=2)$ distrubution scaled to $(\lambda_{\min}, \lambda_{\max})$. $\lambda_{\max}$ is forsed to be in the form.
+    """)
+    return
+
+
+@app.cell
+def _(max_ev, min_ev, run_experiment_adg_vs_optimal, scaling_and_forcing):
+    run_experiment_adg_vs_optimal(
+        exp_name="beta_100_2_scaled_forced",  # CHANGE THIS
+        dist_method=scaling_and_forcing,
+        null_space_dims=(0, 5, 10, 15),
+        device_num=0,
+        # KWARGS
+        a=100,
+        b=2,
+        max_ev=max_ev.value,
+        min_ev=min_ev.value,
     )
     return
 
@@ -514,6 +668,7 @@ def _(pl):
         return data.with_columns(
             pl.lit(1).truediv(pl.col("max_eigenvalue")).alias("max_ev_inv"),
             pl.lit(1).truediv(pl.col("min_eigenvalue")).alias("min_ev_inv"),
+            pl.col("loss").log().diff().name.suffix("_rate_of_change")
         )
     return (preprocess_data,)
 
@@ -528,7 +683,7 @@ def _(Path, general_experiment_path):
 @app.cell
 def _(experiments_data_dirs, mo):
     distribution_experiment = mo.ui.dropdown(options=experiments_data_dirs, label="Distribution experiment")
-    distribution_experiment
+    mo.md(f"{distribution_experiment}")
     return (distribution_experiment,)
 
 
@@ -537,6 +692,34 @@ def _(distribution_experiment, pl, preprocess_data):
     adg_data = preprocess_data(pl.read_parquet(list(distribution_experiment.value.rglob("*adg*.parquet"))))
     optimal_step_data = preprocess_data(pl.read_parquet(list(distribution_experiment.value.rglob("*optimal*.parquet"))))
     return adg_data, optimal_step_data
+
+
+@app.cell
+def _(adg_data, convergence_threshold, mo, optimal_step_data, pl):
+    adg_data_convergence = adg_data.group_by("dimension", "kernel_size", "initial_point_index").agg(pl.col("loss").min())
+    optimal_step_data_convergence = optimal_step_data.group_by("dimension", "kernel_size", "initial_point_index").agg(
+        pl.col("loss").min()
+    )
+
+    adg_data_convergence_mean = adg_data_convergence.select(pl.col("loss").mean())
+    optimal_step_data_convergence_mean = optimal_step_data_convergence.select(pl.col("loss").mean())
+
+    adg_data_convergence_failed = adg_data_convergence.filter(pl.col("loss").gt(convergence_threshold.value))
+    optimal_step_data_convergence_failed = optimal_step_data_convergence.filter(
+        pl.col("loss").gt(convergence_threshold.value)
+    )
+
+    mo.vstack(
+        [
+            mo.md(
+                f"AGD mean loss: {adg_data_convergence_mean['loss'].item()}, Optimal step mean loss: {optimal_step_data_convergence_mean['loss'].item()}"
+            ),
+            mo.md(
+                f"AGD number of failed to converge: {adg_data_convergence_failed.height}, Optimal step failed to converge: {optimal_step_data_convergence_failed.height}"
+            ),
+        ]
+    )
+    return
 
 
 @app.cell(hide_code=True)
@@ -548,22 +731,52 @@ def _(mo):
 
 
 @app.cell
-def _(adg_data, optimal_step_data, pl, wilcoxon):
+def _(adg_data, convergence_threshold, optimal_step_data, pl, wilcoxon):
     hypotheses_test: pl.DataFrame = (
         adg_data.join(
             optimal_step_data.select(
-                "dimension", "kernel_size", "initial_point_index", "iteration", pl.col("loss").alias("lossRight")
+                "dimension",
+                "kernel_size",
+                "initial_point_index",
+                "iteration",
+                pl.col("loss").name.suffix("_optimal"),
+                pl.col("learning_rate").name.suffix("_optimal"),
+                pl.col("loss_rate_of_change").name.suffix("_optimal")
             ),
             on=("dimension", "kernel_size", "initial_point_index", "iteration"),
             how="left",
         )
-        .filter(pl.col("iteration").le(15))
+        .filter(
+            (pl.col("loss").ge(convergence_threshold.value) | pl.col("loss_optimal").ge(convergence_threshold.value))
+            & (
+                pl.col("loss").lt(
+                    pl.col("loss")
+                    .quantile(0.98, interpolation="linear")
+                    .over("dimension", "kernel_size", "initial_point_index")
+                )
+            )
+            & (
+                pl.col("loss_optimal").lt(
+                    pl.col("loss_optimal")
+                    .quantile(0.98, interpolation="linear")
+                    .over("dimension", "kernel_size", "initial_point_index")
+                )
+            )
+        )
         .group_by("dimension", "kernel_size", "initial_point_index")
-        .agg("iteration", "loss", "lossRight")
+        .agg("iteration", "loss", "loss_optimal", "learning_rate", "learning_rate_optimal", "loss_rate_of_change", "loss_rate_of_change_optimal")
         .with_columns(
-            pl.struct(["loss", "lossRight"])
-            .map_elements(lambda x: wilcoxon(x["loss"], x["lossRight"], alternative="less").pvalue, return_dtype=pl.Float64)
-            .alias("p_value")
+            pl.struct(["loss", "loss_optimal"])
+            .map_elements(
+                lambda x: wilcoxon(x["loss"], x["loss_optimal"], alternative="less").pvalue, return_dtype=pl.Float64
+            )
+            .alias("loss_p_value"),
+            pl.struct(["learning_rate", "learning_rate_optimal"])
+            .map_elements(
+                lambda x: wilcoxon(x["learning_rate"], x["learning_rate_optimal"], alternative="greater").pvalue,
+                return_dtype=pl.Float64,
+            )
+            .alias("lr_p_value"),
         )
     )
     return (hypotheses_test,)
@@ -571,7 +784,17 @@ def _(adg_data, optimal_step_data, pl, wilcoxon):
 
 @app.cell
 def _(hypotheses_test: "pl.DataFrame", mo, pl):
-    mo.ui.dataframe(hypotheses_test.filter(pl.col("p_value").ge(0.05)))
+    mo.md(f"""
+    #Hypothesis of adg converging faster {mo.ui.dataframe(hypotheses_test.filter(pl.col("loss_p_value").gt(0.05)))}
+    """)
+    return
+
+
+@app.cell
+def _(hypotheses_test: "pl.DataFrame", mo, pl):
+    mo.md(f"""
+    #Hypothesis of adg having bigger step {mo.ui.dataframe(hypotheses_test.filter(pl.col("lr_p_value").gt(0.05)))}
+    """)
     return
 
 
@@ -584,17 +807,11 @@ def _(mo):
 
 
 @app.cell
-def _(adg_data, mo):
+def _(adg_data, mo, optimal_step_data):
     dim_to_plot = mo.ui.dropdown(options=adg_data["dimension"].unique())
     ker_to_plot = mo.ui.dropdown(options=adg_data["kernel_size"].unique())
     init_point_to_plot = mo.ui.dropdown(options=adg_data["initial_point_index"].unique())
-    what_to_plot = mo.ui.multiselect(
-        options=[
-            "gradient_norm",
-            "learning_rate",
-            "loss",
-        ]
-    )
+    what_to_plot = mo.ui.multiselect(options=set(adg_data.columns) & set(optimal_step_data.columns))
     return dim_to_plot, init_point_to_plot, ker_to_plot, what_to_plot
 
 
@@ -639,7 +856,7 @@ def _(
     )
 
 
-    fig = make_subplots(rows=1, cols=2, shared_yaxes=True)
+    fig = make_subplots(rows=1, cols=1, shared_yaxes=True)
     colors = [
         "#FDFD96",
         "#FFD1DC",
@@ -647,10 +864,19 @@ def _(
 
     for i, y_axis in enumerate(what_to_plot.value):
         fig.add_trace(
-            go.Scatter(x=left_chosen_data["iteration"], y=left_chosen_data[y_axis], mode="markers", name=f"{y_axis}, adg"), 1, 1
+            go.Line(x=left_chosen_data["iteration"], y=left_chosen_data[y_axis], mode="lines", name=f"{y_axis}, adg"),
+            1,
+            1,
         )
         fig.add_trace(
-            go.Scatter(x=right_chosen_data["iteration"], y=right_chosen_data[y_axis], mode="markers", name=f"{y_axis}, optimal step"), 1, 2
+            go.Scatter(
+                x=right_chosen_data["iteration"],
+                y=right_chosen_data[y_axis],
+                mode="lines",
+                name=f"{y_axis}, optimal step",
+            ),
+            1,
+            1,
         )
 
     fig.update_xaxes(title_text="Iteration (adg)", row=1, col=1)
@@ -659,20 +885,57 @@ def _(
     fig.update_yaxes(title_text=f"Value ({' / '.join(what_to_plot.value)})")
     fig.update_layout()
 
-    eigen_vals = jnp.load(
-        distribution_experiment.value / f"form_{dim_to_plot.value}_{ker_to_plot.value}/quadratic_form.npy"
-    ) if (dim_to_plot.value is not None and ker_to_plot.value is not None) else [0]
-    eigen_vals_plot = mo.ui.plotly(
-        px.scatter(x=list(eigen_vals), y=list(eigen_vals))
+    eigen_vals = (
+        jnp.load(distribution_experiment.value / f"form_{dim_to_plot.value}_{ker_to_plot.value}/quadratic_form.npy")
+        if (dim_to_plot.value is not None and ker_to_plot.value is not None)
+        else [0]
+    )
+    eigen_vals_plot = mo.ui.plotly(px.scatter(x=list(eigen_vals), y=list(eigen_vals)))
+
+    lr_distribution_figure = make_subplots(rows=1, cols=2, shared_yaxes=True)
+    lr_distribution_figure.add_trace(
+        go.Histogram(x=left_chosen_data["learning_rate"], nbinsx=50, name="step distribution ADG"), row=1, col=1
+    )
+    lr_distribution_figure.add_trace(
+        go.Histogram(x=right_chosen_data["learning_rate"], nbinsx=50, name="optimal step distribution"), row=1, col=2
     )
 
+
     gd_results_plot = mo.ui.plotly(fig)
-    return eigen_vals_plot, gd_results_plot
+    lr_distribution_plot = mo.ui.plotly(lr_distribution_figure)
+    return eigen_vals_plot, gd_results_plot, lr_distribution_plot
 
 
 @app.cell
-def _(eigen_vals_plot, gd_results_plot, mo, plot_constructor):
-    mo.vstack([plot_constructor, gd_results_plot, eigen_vals_plot])
+def _(
+    eigen_vals_plot,
+    gd_results_plot,
+    lr_distribution_plot,
+    mo,
+    plot_constructor,
+):
+    mo.vstack([plot_constructor, gd_results_plot, eigen_vals_plot, lr_distribution_plot])
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ### Notes
+
+    #### Experiment setup
+    For each quadratic form run both AGD and optimal step GD for $n$ steps. Specify some convergence threshold $\mathcal{L}$, i.e. if loss is smaller than $\mathcal{L}$ we consider g.d. converged. Filter out all unconverged steps and apply wilxocon test to vectors with loss and learning rate values. By default we apply alternative hypothesis than loss/lr vector of AGD has **bigger** values in distribution than optimal step. *Usually if null hypothesis failed to disprove it means than optimal step data vector is statistically bigger.*
+
+    #### Experiment notes
+    - uniform distribution $[\lambda_{\min}, \lambda_{\max}]$, converges faster and has bigger step
+    - Beta($lpha=2$, $eta=100$) AGD converges faster than optimal step, step is bigger
+    - Beta($lpha=100$, $eta=24$) AGD converges slower, and learning rate is smaller too
+
+    I tried to create more *extreme* spectral gap:
+    - All the eigenvalue are the $\lambda_{\min}$ and one is $\lambda_{\max}$. ADG converged slower. What is interesting that there are $pprox$ 200 functions that have this reversed. What is more interesting, that those are 200 functions that haven't converged.
+    - All the eigenvalue are the $\lambda_{\max}$ and one is $\lambda_{\min}$. ADG converged slower add had smaller step.
+    - All the eigenvalue are the $\lambda_{\min}$ and two are $\lambda_{\max}$ and $\lambda_{\max}-1$. ADG converged slower. What is interesting that there are $pprox$ 50 functions that have this reversed. What is more interesting, that those are 50 functions that haven't converged.
+    """)
     return
 
 
