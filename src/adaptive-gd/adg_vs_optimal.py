@@ -249,7 +249,7 @@ def _(Path, QuadraticForm, jax, jnp, mo, np, pl):
 
                             x_prev = x
                             grad_prev = grad_i
-                        
+
                             theta_i = lambda_i / lambda_prev
                             lambda_prev = lambda_i
 
@@ -751,6 +751,12 @@ def _(distribution_experiment, pl, preprocess_data):
 
 
 @app.cell
+def _(adg_data):
+    adg_data
+    return
+
+
+@app.cell
 def _(adg_data, optimal_step_data, pl):
     adg_with_optimal = (
         adg_data.join(
@@ -759,18 +765,20 @@ def _(adg_data, optimal_step_data, pl):
                 "kernel_size",
                 "initial_point_index",
                 "iteration",
+                "index",
                 pl.col("loss").name.suffix("_optimal"),
                 pl.col("learning_rate").name.suffix("_optimal"),
                 pl.col("loss_rate_of_change").name.suffix("_optimal"),
             ),
-            on=("dimension", "kernel_size", "initial_point_index", "iteration"),
+            on=("dimension", "kernel_size", "initial_point_index", "iteration", "index"),
             how="left",
         )
         .with_columns(
             pl.when(pl.col("learning_rate_optimal").is_not_null())
             .then(pl.col("learning_rate") / pl.col("learning_rate_optimal"))
             .otherwise(None)
-            .alias("step_ratio")
+            .alias("step_ratio"),
+            pl.col("loss").truediv(pl.col("loss_optimal")).alias("agd/opt"),
         )
     )
     return (adg_with_optimal,)
@@ -964,8 +972,8 @@ def _(
         pl.col("dimension").eq(dim_to_plot.value)
         & pl.col("kernel_size").eq(ker_to_plot.value)
         & pl.col("initial_point_index").eq(init_point_to_plot.value)
+        & pl.col("index").eq(form_idx.value)
     )
-
 
     fig = make_subplots(rows=1, cols=1, shared_yaxes=True)
     colors = [
@@ -1011,18 +1019,30 @@ def _(
         go.Histogram(x=right_chosen_data["learning_rate"], nbinsx=50, name="optimal step distribution"), row=1, col=2
     )
 
-    step_ratio_figure = make_subplots(rows=1, cols=1)
+    step_ratio_figure = make_subplots(rows=2, cols=1)
     step_ratio_figure.add_trace(
         go.Histogram(x=chosen_joined_data["step_ratio"], nbinsx=50, name="step ratio (ADG/optimal)"),
         1,
         1,
+    )
+    step_ratio_figure.add_trace(
+        go.Scatter(
+            y=chosen_joined_data["agd/opt"],
+            x=chosen_joined_data["iteration"],
+            mode="lines"
+        ),row=2,col=1
     )
 
 
     gd_results_plot = mo.ui.plotly(fig)
     lr_distribution_plot = mo.ui.plotly(lr_distribution_figure)
     step_ratio_plot = mo.ui.plotly(step_ratio_figure)
-    return eigen_vals_plot, gd_results_plot, lr_distribution_plot, step_ratio_plot
+    return (
+        eigen_vals_plot,
+        gd_results_plot,
+        lr_distribution_plot,
+        step_ratio_plot,
+    )
 
 
 @app.cell
@@ -1030,9 +1050,9 @@ def _(
     eigen_vals_plot,
     gd_results_plot,
     lr_distribution_plot,
-    step_ratio_plot,
     mo,
     plot_constructor,
+    step_ratio_plot,
 ):
     mo.vstack([plot_constructor, gd_results_plot, eigen_vals_plot, lr_distribution_plot, step_ratio_plot])
     return
